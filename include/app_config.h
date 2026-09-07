@@ -1,8 +1,11 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
-#define IMU_SAMPLE_HZ          1000u
-#define FUSION_OUTPUT_HZ        200u
+#define ENABLE_ENV_SENSORS        0u
+
+/* The no-solder reference build uses a Qwiic I2C link at 400 kHz. */
+#define IMU_SAMPLE_HZ           200u
+#define FUSION_OUTPUT_HZ        100u
 #define BARO_SAMPLE_HZ           50u
 #define TEMP_SAMPLE_HZ           10u
 #define TELEMETRY_OUTPUT_HZ       50u

@@ -1,26 +1,31 @@
 # Hardware and wiring
 
-Reference board: NUCLEO-F446RE, 3.3 V logic. Confirm that every breakout board
-is also operating at 3.3 V and does not contain pull-ups to 5 V.
+## No-solder minimum build
+
+Use a NUCLEO-F446RE, SparkFun ICM-20948 Qwiic breakout (`SEN-15335`), and one
+Qwiic-to-male jumper cable. The male ends plug directly into the NUCLEO female
+headers; no loose pin header or breadboard contact is used.
 
 | Signal | STM32 pin | Destination |
 |---|---|---|
-| SPI1_SCK | PA5 | ICM-42688 SCLK |
-| SPI1_MISO | PA6 | ICM-42688 SDO |
-| SPI1_MOSI | PA7 | ICM-42688 SDI |
-| IMU_CS | PB6 GPIO | ICM-42688 CS |
-| IMU_INT1 | PC7 EXTI | ICM-42688 INT1/data-ready |
-| I2C1_SCL | PB8 | BMP390 + TMP117 SCL |
-| I2C1_SDA | PB9 | BMP390 + TMP117 SDA |
+| I2C1_SCL | PB8 | Qwiic yellow / ICM-20948 SCL |
+| I2C1_SDA | PB9 | Qwiic blue / ICM-20948 SDA |
 | USART2_TX | PA2 | ST-LINK VCP RX |
-| GND / 3V3 | GND / 3V3 | all sensors |
+| GND | GND | Qwiic black |
+| 3V3 | 3V3 | Qwiic red |
 
-Use a 100 nF ceramic capacitor at each sensor and 4.7 kOhm pull-ups on SDA/SCL
-if the breakout boards do not already provide them. Keep the SPI wiring short.
+The SparkFun breakout includes regulation and logic-level translation. Do not
+add the generic level-shifter assortment or external I2C pull-ups. Keep the
+Qwiic cable short and configure I2C1 for 400 kHz.
 
-Expected addresses are BMP390 `0x76` (SDO low) and TMP117 `0x48` (ADD0 low).
-Verify WHO_AM_I/chip IDs at startup and refuse to publish the associated valid
-bit if they do not match.
+The default ICM-20948 address is `0x69`; WHO_AM_I must be `0xEA`. Verify both at
+startup and refuse to publish `STATUS_IMU_VALID` if the ID does not match.
+
+## Optional environmental extension
+
+Set `ENABLE_ENV_SENSORS` to `1`, then daisy-chain Qwiic BMP390 (`0x77`) and
+TMP117 (`0x48`) breakouts. Their addresses do not conflict. This phase is not
+required for the minimum resume-ready hardware validation.
 
 The NUCLEO virtual COM port is commonly wired to USART2. Check solder bridges
 for the exact board revision before attaching another UART adapter.

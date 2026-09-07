@@ -1,24 +1,30 @@
-# RTOS Sensor Fusion Node
+# RTOS IMU Sensor Fusion Node
 
-A portfolio-grade STM32F446 real-time sensor node that samples an ICM-42688-P
-IMU over SPI, a BMP390 barometer and TMP117 temperature sensor over I2C,
-filters attitude/altitude estimates, and emits framed binary telemetry over a
-DMA-backed UART.
+A no-solder reference build for the STM32F446. It samples a Qwiic ICM-20948
+IMU over I2C DMA, estimates attitude, and emits framed binary telemetry over a
+DMA-backed UART. BMP390 and TMP117 support remains as an optional second phase;
+the default firmware does not require either sensor.
 
 The repository deliberately separates the portable signal-processing and wire
 protocol code from the board support package. This makes the difficult parts
 testable on a workstation while keeping timing, DMA, watchdog, and power
 behavior visible in the firmware.
 
-## Reference hardware
+## No-solder reference hardware
 
 | Part | Role | Bus / rate |
 |---|---|---|
 | NUCLEO-F446RE | MCU, Cortex-M4F at 180 MHz | — |
-| ICM-42688-P | 6-axis IMU | SPI1, 1 kHz |
-| BMP390 | pressure + sensor temperature | I2C1, 50 Hz |
-| TMP117 | board temperature | I2C1, 10 Hz |
+| SparkFun ICM-20948 Qwiic (SEN-15335) | 9-axis IMU; accel + gyro used first | I2C1 DMA, 200 Hz |
+| Qwiic-to-male jumper cable | Direct connection to NUCLEO headers | — |
 | ST-LINK VCP | telemetry and logs | USART2, 921600 8-N-1 |
+| 8-channel logic analyzer | I2C/UART evidence | — |
+
+No header soldering, pull-up resistor, level shifter, external ST-LINK, or
+USB-to-UART adapter is required for this build. The SparkFun board provides
+regulation, level shifting, and Qwiic connectivity. A breadboard is optional
+for making logic-analyzer tap points. A BMP390 and TMP117 can later be
+daisy-chained over Qwiic without changing the core design.
 
 See [docs/hardware.md](docs/hardware.md) for the wiring and [docs/architecture.md](docs/architecture.md)
 for task priorities, data flow, timing budget, recovery, and power states.
@@ -26,9 +32,9 @@ for task priorities, data flow, timing budget, recovery, and power states.
 ## What is implemented
 
 - FreeRTOS task layout with rate-monotonic priorities and bounded queues
-- SPI and I2C transfer contracts designed for DMA completion notifications
+- I2C and UART transfer contracts designed for DMA completion notifications
 - Two-state Kalman filters for roll and pitch (angle + gyro bias)
-- Scalar Kalman filter for barometric altitude
+- Optional scalar Kalman filter for a future barometric-altitude extension
 - Stationary IMU calibration with variance/rejection checks
 - Versioned binary UART protocol with sequence numbers, timestamps, status bits,
   saturation-safe fixed-point fields, and CRC-16/CCITT-FALSE
@@ -108,9 +114,9 @@ XOR `0x20`. All multibyte values are little-endian. Packet type `0x01` is the
 
 The code is only half the project. For a strong portfolio demonstration, attach:
 
-1. Logic-analyzer traces showing the 1 kHz SPI transaction and DMA-complete ISR.
+1. Logic-analyzer traces showing the 200 Hz I2C burst and DMA-complete ISR.
 2. Runtime-stat screenshots showing deadlines and CPU load under UART pressure.
-3. A six-position calibration report and stationary/no-motion Allan-style plot.
+3. A six-position IMU calibration report and stationary/no-motion Allan-style plot.
 4. Watchdog recovery video with the fault-injection pin held active.
 5. Current measurements in NORMAL, IDLE, and STOP states.
 
@@ -118,5 +124,6 @@ Use [docs/validation.md](docs/validation.md) as the acceptance sheet.
 
 ## License
 
-MIT. Sensor register definitions should be checked against the exact silicon
-revision used on the assembled board.
+MIT. The no-solder build targets ICM-20948 WHO_AM_I `0xEA` at I2C address
+`0x69`. Sensor register definitions must still be checked against the exact
+silicon revision received.

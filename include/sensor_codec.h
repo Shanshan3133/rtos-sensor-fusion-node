@@ -6,7 +6,7 @@
 
 #include "sensor_types.h"
 
-#define ICM42688_WHO_AM_I_VALUE 0x47u
+#define ICM20948_WHO_AM_I_VALUE 0xEAu
 #define BMP390_CHIP_ID_VALUE    0x60u
 
 typedef struct {
@@ -20,9 +20,9 @@ typedef struct {
     double par_p7, par_p8, par_p9, par_p10, par_p11;
 } bmp390_calibration_t;
 
-/* Decode a 14-byte burst beginning at ICM-42688-P TEMP_DATA1. The selected
- * ranges must be +/-16 g and +/-2000 degrees/s. */
-bool icm42688_decode_16g_2000dps(const uint8_t burst[14],
+/* Decode a 14-byte burst beginning at ICM-20948 ACCEL_XOUT_H (bank 0, 0x2D).
+ * The selected ranges must be +/-16 g and +/-2000 degrees/s. */
+bool icm20948_decode_16g_2000dps(const uint8_t burst[14],
                                 uint32_t timestamp_us,
                                 imu_sample_t *sample);
 

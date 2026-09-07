@@ -7,8 +7,8 @@
 #define DEG_TO_RAD         0.01745329251994329577f
 #define ICM_ACCEL_LSB_G    2048.0f
 #define ICM_GYRO_LSB_DPS   16.4f
-#define ICM_TEMP_LSB_C     132.48f
-#define ICM_TEMP_OFFSET_C  25.0f
+#define ICM_TEMP_LSB_C     333.87f
+#define ICM_TEMP_OFFSET_C  21.0f
 
 static int16_t be_i16(const uint8_t *bytes) {
     return (int16_t)(((uint16_t)bytes[0] << 8) | bytes[1]);
@@ -22,22 +22,22 @@ static int16_t le_i16(const uint8_t *bytes) {
     return (int16_t)le_u16(bytes);
 }
 
-bool icm42688_decode_16g_2000dps(const uint8_t burst[14],
+bool icm20948_decode_16g_2000dps(const uint8_t burst[14],
                                 uint32_t timestamp_us,
                                 imu_sample_t *sample) {
     if (burst == NULL || sample == NULL) return false;
 
     sample->timestamp_us = timestamp_us;
-    sample->imu_temp_c = (float)be_i16(&burst[0]) / ICM_TEMP_LSB_C +
-                         ICM_TEMP_OFFSET_C;
     for (size_t axis = 0u; axis < 3u; ++axis) {
-        const int16_t accel_raw = be_i16(&burst[2u + axis * 2u]);
-        const int16_t gyro_raw = be_i16(&burst[8u + axis * 2u]);
+        const int16_t accel_raw = be_i16(&burst[axis * 2u]);
+        const int16_t gyro_raw = be_i16(&burst[6u + axis * 2u]);
         sample->accel_mps2[axis] = (float)accel_raw *
                                    (GRAVITY_MPS2 / ICM_ACCEL_LSB_G);
         sample->gyro_rads[axis] = (float)gyro_raw *
                                   (DEG_TO_RAD / ICM_GYRO_LSB_DPS);
     }
+    sample->imu_temp_c = (float)be_i16(&burst[12]) / ICM_TEMP_LSB_C +
+                         ICM_TEMP_OFFSET_C;
     return true;
 }
 

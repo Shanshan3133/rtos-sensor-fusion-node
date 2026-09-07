@@ -153,15 +153,16 @@ static void test_firmware_decoder_and_resync(void) {
 
 static void test_sensor_codecs(void) {
     const uint8_t icm[14] = {
-        0x00u, 0x00u,
         0x08u, 0x00u, 0xF8u, 0x00u, 0x00u, 0x00u,
-        0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x10u
+        0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x10u,
+        0x00u, 0x00u
     };
     imu_sample_t sample;
-    assert(icm42688_decode_16g_2000dps(icm, 1234u, &sample));
+    assert(icm20948_decode_16g_2000dps(icm, 1234u, &sample));
     assert(fabsf(sample.accel_mps2[0] - 9.80665f) < 1.0e-4f);
     assert(fabsf(sample.accel_mps2[1] + 9.80665f) < 1.0e-4f);
     assert(sample.gyro_rads[2] > 0.0f);
+    assert(fabsf(sample.imu_temp_c - 21.0f) < 1.0e-6f);
     assert(sample.timestamp_us == 1234u);
 
     const uint8_t tmp_positive[2] = {0x0Cu, 0x80u};

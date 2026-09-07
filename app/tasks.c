@@ -14,19 +14,25 @@
 #include <string.h>
 
 static QueueHandle_t imu_queue;
+#if ENABLE_ENV_SENSORS
 static QueueHandle_t baro_queue;
 static QueueHandle_t temp_queue;
+#endif
 static QueueHandle_t state_queue;
 static volatile uint32_t health_mask;
 static volatile uint32_t sticky_status;
 
 static StaticQueue_t imu_queue_control;
+#if ENABLE_ENV_SENSORS
 static StaticQueue_t baro_queue_control;
 static StaticQueue_t temp_queue_control;
+#endif
 static StaticQueue_t state_queue_control;
 static uint8_t imu_queue_storage[IMU_QUEUE_DEPTH * sizeof(imu_sample_t)];
+#if ENABLE_ENV_SENSORS
 static uint8_t baro_queue_storage[BARO_QUEUE_DEPTH * sizeof(baro_sample_t)];
 static uint8_t temp_queue_storage[TEMP_QUEUE_DEPTH * sizeof(temp_sample_t)];
+#endif
 static uint8_t state_queue_storage[TELEMETRY_QUEUE_DEPTH * sizeof(fused_state_t)];
 
 static void status_set(uint32_t bits) {
@@ -110,6 +116,7 @@ static void imu_task(void *argument) {
     }
 }
 
+#if ENABLE_ENV_SENSORS
 static void environment_task(void *argument) {
     (void)argument;
     TickType_t wake = xTaskGetTickCount();
@@ -142,12 +149,15 @@ static void environment_task(void *argument) {
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(1000u / BARO_SAMPLE_HZ));
     }
 }
+#endif
 
 static void fusion_task(void *argument) {
     (void)argument;
     fusion_filter_t filter;
     fused_state_t state;
+#if ENABLE_ENV_SENSORS
     temp_sample_t temperature;
+#endif
     TickType_t last_publish = 0u;
     memset(&state, 0, sizeof(state));
     fusion_init(&filter, 101325.0f);
@@ -160,6 +170,7 @@ static void fusion_task(void *argument) {
         }
         (void)fusion_update_imu(&filter, &imu, &state);
 
+#if ENABLE_ENV_SENSORS
         baro_sample_t baro;
         while (xQueueReceive(baro_queue, &baro, 0u) == pdPASS) {
             (void)fusion_update_baro(&filter, &baro, &state);
@@ -168,6 +179,10 @@ static void fusion_task(void *argument) {
             state.temperature_c = temperature.temperature_c;
             state.status |= STATUS_TEMP_VALID;
         }
+#else
+        state.temperature_c = imu.imu_temp_c;
+        state.status |= STATUS_TEMP_VALID;
+#endif
         state.status |= status_get();
 
         const TickType_t now = xTaskGetTickCount();
@@ -233,20 +248,28 @@ static void power_task(void *argument) {
 void app_start(void) {
     imu_queue = xQueueCreateStatic(IMU_QUEUE_DEPTH, sizeof(imu_sample_t),
                                    imu_queue_storage, &imu_queue_control);
+    state_queue = xQueueCreateStatic(TELEMETRY_QUEUE_DEPTH,
+                                     sizeof(fused_state_t),
+                                     state_queue_storage,
+                                     &state_queue_control);
+#if ENABLE_ENV_SENSORS
     baro_queue = xQueueCreateStatic(BARO_QUEUE_DEPTH, sizeof(baro_sample_t),
                                     baro_queue_storage, &baro_queue_control);
     temp_queue = xQueueCreateStatic(TEMP_QUEUE_DEPTH, sizeof(temp_sample_t),
                                     temp_queue_storage, &temp_queue_control);
-    state_queue = xQueueCreateStatic(TELEMETRY_QUEUE_DEPTH, sizeof(fused_state_t),
-                                     state_queue_storage, &state_queue_control);
     configASSERT(imu_queue && baro_queue && temp_queue && state_queue);
+#else
+    configASSERT(imu_queue && state_queue);
+#endif
 
     configASSERT(xTaskCreate(imu_task, "imu", 384u, NULL, TASK_PRIORITY_IMU,
                              NULL) == pdPASS);
     configASSERT(xTaskCreate(fusion_task, "fusion", 640u, NULL,
                              TASK_PRIORITY_FUSION, NULL) == pdPASS);
+#if ENABLE_ENV_SENSORS
     configASSERT(xTaskCreate(environment_task, "env", 384u, NULL,
                              TASK_PRIORITY_ENV, NULL) == pdPASS);
+#endif
     configASSERT(xTaskCreate(telemetry_task, "uart", 384u, NULL,
                              TASK_PRIORITY_TELEMETRY, NULL) == pdPASS);
     configASSERT(xTaskCreate(power_task, "power", 256u, NULL,

@@ -2,18 +2,18 @@
 
 ## Data flow and scheduling
 
-The 1 kHz IMU task is the highest-rate producer. It waits for data-ready, starts
-a full-duplex SPI DMA burst, and blocks on a direct notification. The fusion
-task consumes calibrated samples and publishes at 200 Hz. Environmental data is
-sampled independently so a slow I2C device cannot delay the IMU path. Telemetry
-decimates fused states to 50 Hz and owns UART DMA.
+The 200 Hz IMU task is the highest-rate producer. It starts an I2C DMA register
+burst and blocks on a direct notification. The fusion task consumes calibrated
+samples and publishes at 100 Hz. Telemetry decimates fused states to 50 Hz and
+owns UART DMA. The environmental task is compiled out in the no-solder minimum
+build and can be enabled later without changing the fusion or telemetry APIs.
 
 | Priority | Task | Period / deadline | WCET target | Stack |
 |---:|---|---|---:|---:|
 | 6 | watchdog | 250 ms | 50 us | 256 words |
-| 5 | IMU acquisition | 1 ms | 120 us | 384 words |
-| 4 | fusion | event-driven / 5 ms output | 180 us | 640 words |
-| 3 | environment | 20 ms | 500 us | 384 words |
+| 5 | IMU acquisition | 5 ms | 500 us | 384 words |
+| 4 | fusion | event-driven / 10 ms output | 180 us | 640 words |
+| 3 | environment (optional) | 20 ms | 500 us | 384 words |
 | 2 | telemetry | 20 ms | 200 us CPU | 384 words |
 | 1 | power policy | 100 ms | 50 us | 256 words |
 
@@ -39,7 +39,7 @@ pressure produces an altitude offset, not instability.
 
 ## Recovery model
 
-- Three consecutive sensor transaction failures reset and reinitialize the bus.
+- Three consecutive sensor transaction failures reset and reinitialize I2C1.
 - DMA waits have deadlines; timeout recovery disables the stream and clears all
   flags before reuse.
 - Each critical task votes once per watchdog window. Only a complete vote set
@@ -59,4 +59,4 @@ and high-rate sampling; RTC or an external interrupt wakes the board, restores
 clocks, reinitializes time bases, and restarts sensors before valid bits return.
 
 STOP is only appropriate for explicitly quiescent periods. Entering it between
-1 kHz samples would cost more wake energy than it saves.
+200 Hz samples would cost more wake energy than it saves.

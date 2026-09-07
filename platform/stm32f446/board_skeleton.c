@@ -9,20 +9,15 @@
  * Reference register-level primitives. Sensor coefficient parsing is board
  * specific and remains behind the platform_* read functions.
  */
-static TaskHandle_t spi_waiter;
 static TaskHandle_t i2c_waiter;
 static TaskHandle_t uart_waiter;
 
 static void gpio_init(void) {
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN;
     (void)RCC->AHB1ENR;
-    /* PA5/6/7: SPI1 AF5; PA2: USART2 AF7; PB8/9: I2C1 AF4 open drain. */
-    GPIOA->MODER = (GPIOA->MODER & ~((3u << 10) | (3u << 12) | (3u << 14) |
-                                      (3u << 4))) |
-                   (2u << 10) | (2u << 12) | (2u << 14) | (2u << 4);
-    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~((0xFu << 20) | (0xFu << 24) |
-                                       (0xFu << 28) | (0xFu << 8))) |
-                    (5u << 20) | (5u << 24) | (5u << 28) | (7u << 8);
+    /* PA2: USART2 AF7; PB8/9: I2C1 AF4 open drain. */
+    GPIOA->MODER = (GPIOA->MODER & ~(3u << 4)) | (2u << 4);
+    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFu << 8)) | (7u << 8);
     GPIOB->MODER = (GPIOB->MODER & ~((3u << 16) | (3u << 18))) |
                    (2u << 16) | (2u << 18);
     GPIOB->OTYPER |= (1u << 8) | (1u << 9);
@@ -46,7 +41,7 @@ void platform_init(void) {
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     gpio_init();
     uart2_init();
-    /* SPI1, I2C1, DMA, EXTI and NVIC setup follow the table in README.md. */
+    /* I2C1, DMA and NVIC setup follow the table in README.md. */
 }
 
 uint32_t platform_time_us(void) {
@@ -111,7 +106,7 @@ void platform_enter_power_mode(platform_power_mode_t mode) {
 
 /* These are deliberately hard failures until real sensor drivers are bound. */
 bool platform_imu_read_dma(imu_sample_t *sample, uint32_t timeout_ms) {
-    (void)sample; (void)timeout_ms; (void)spi_waiter; return false;
+    (void)sample; (void)timeout_ms; (void)i2c_waiter; return false;
 }
 bool platform_baro_read_dma(baro_sample_t *sample, uint32_t timeout_ms) {
     (void)sample; (void)timeout_ms; (void)i2c_waiter; return false;
