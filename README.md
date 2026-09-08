@@ -1,14 +1,39 @@
 # RTOS IMU Sensor Fusion Node
 
-A no-solder reference build for the STM32F446. It samples a Qwiic ICM-20948
-IMU over I2C DMA, estimates attitude, and emits framed binary telemetry over a
-DMA-backed UART. BMP390 and TMP117 support remains as an optional second phase;
-the default firmware does not require either sensor.
+A no-solder reference design for the STM32F446. It is designed to sample a
+Qwiic ICM-20948 IMU over I2C DMA, estimate attitude, and emit framed binary
+telemetry over a DMA-backed UART. BMP390 and TMP117 support remains as an
+optional second phase; the default firmware does not require either sensor.
 
 The repository deliberately separates the portable signal-processing and wire
 protocol code from the board support package. This makes the difficult parts
 testable on a workstation while keeping timing, DMA, watchdog, and power
 behavior visible in the firmware.
+
+## Verification status
+
+This repository does **not** claim completed STM32 hardware validation yet.
+The boundary is explicit:
+
+| Status | Scope |
+|---|---|
+| Host verified | ICM-20948 raw-data decoding, calibration and Kalman math, telemetry framing/CRC/escaping, receiver resynchronization, and Python fault-injection tests |
+| Implemented; target runtime pending | FreeRTOS task/queue orchestration, health voting, watchdog policy, UART DMA path, and power-state interfaces |
+| Hardware validation pending | `platform_imu_read_dma()`, complete I2C1/DMA initialization and ISR binding, sustained 200 Hz acquisition, logic-analyzer waveforms, measured WCET/stack headroom, watchdog reset timing, and current consumption |
+
+`platform_imu_read_dma()` intentionally remains a fail-closed board-support
+stub until the exact NUCLEO and sensor hardware is connected. All timing values
+marked as targets or `TBD` are acceptance criteria, not measured results.
+
+## Engineering trade-off
+
+The initial concept used a bare ICM-42688-P breakout over SPI. To reduce
+assembly and voltage-level risk during portfolio validation, the reference
+hardware was changed to a SparkFun ICM-20948 Qwiic breakout using 400 kHz I2C
+DMA at 200 Hz. This preserves the RTOS architecture, asynchronous DMA flow,
+filtering, fault handling, and protocol work while making the first hardware
+milestone solder-free. SPI and the environmental sensors remain possible later
+extensions rather than unverified claims in the minimum build.
 
 ## No-solder reference hardware
 
