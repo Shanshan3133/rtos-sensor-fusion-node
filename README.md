@@ -1,154 +1,115 @@
-# RTOS IMU Sensor Fusion Node
+# FreeRTOS Dual-Channel Real-Time Spectrum Analyzer
 
-A no-solder reference design for the STM32F446. It is designed to sample a
-Qwiic ICM-20948 IMU over I2C DMA, estimate attitude, and emit framed binary
-telemetry over a DMA-backed UART. BMP390 and TMP117 support remains as an
-optional second phase; the default firmware does not require either sensor.
+Portfolio firmware for the STM32F446RE. The design samples two analog channels
+simultaneously at 100 kS/s per channel, processes 1024-sample blocks, and emits
+RMS, peak, dominant-frequency, waveform-preview, and spectrum data at 20 Hz.
 
-The repository deliberately separates the portable signal-processing and wire
-protocol code from the board support package. This makes the difficult parts
-testable on a workstation while keeping timing, DMA, watchdog, and power
-behavior visible in the firmware.
+The minimum hardware is one NUCLEO-F446RE, its Mini-USB data cable, and two
+male-to-male jumper wires. The STM32 DAC generates a coherent 976.5625 Hz
+self-test tone; wiring PA4 to PA0 and PA1 closes the complete DAC-to-ADC loop.
+No sensor module, soldering, external programmer, or USB-to-UART adapter is
+required. A logic analyzer is useful evidence but is not required to run it.
 
-## Verification status
-
-This repository does **not** claim completed STM32 hardware validation yet.
-The boundary is explicit:
+## Honest completion status
 
 | Status | Scope |
 |---|---|
-| Host verified | ICM-20948 raw-data decoding, calibration and Kalman math, telemetry framing/CRC/escaping, receiver resynchronization, and Python fault-injection tests |
-| Implemented; target runtime pending | FreeRTOS task/queue orchestration, health voting, watchdog policy, UART DMA path, and power-state interfaces |
-| Hardware validation pending | `platform_imu_read_dma()`, complete I2C1/DMA initialization and ISR binding, sustained 200 Hz acquisition, logic-analyzer waveforms, measured WCET/stack headroom, watchdog reset timing, and current consumption |
+| Host verified | CRC-16, framing, recovery, spectrum reassembly, bandwidth bound, and 14 Python/fault-injection tests; portable FFT/C tests pass Cortex-M4 strict compile checks but were not executed because this PC has no native C toolchain |
+| Implemented; target build pending | FreeRTOS queues/tasks, dual-ADC DMA adapter, CMSIS-DSP Q15 backend, DAC DMA self-test, USART2 TX DMA, task health voting, IWDG policy, and WFI idle |
+| Requires the physical board | CubeMX-generated HAL project integration, flash/run, 100 kS/s timing, CMSIS-DSP WCET, UART endurance, stack high-water marks, watchdog reset, and captured evidence |
 
-`platform_imu_read_dma()` intentionally remains a fail-closed board-support
-stub until the exact NUCLEO and sensor hardware is connected. All timing values
-marked as targets or `TBD` are acceptance criteria, not measured results.
+No measured hardware number is claimed before it is measured. Files under
+`platform/stm32f446/` are integration-ready adapters, not proof that the target
+binary has already run.
 
-## Engineering trade-off
+## Architecture
 
-The initial concept used a bare ICM-42688-P breakout over SPI. To reduce
-assembly and voltage-level risk during portfolio validation, the reference
-hardware was changed to a SparkFun ICM-20948 Qwiic breakout using 400 kHz I2C
-DMA at 200 Hz. This preserves the RTOS architecture, asynchronous DMA flow,
-filtering, fault handling, and protocol work while making the first hardware
-milestone solder-free. SPI and the environmental sensors remain possible later
-extensions rather than unverified claims in the minimum build.
+- ADC1 and ADC2 use dual regular simultaneous mode, triggered by TIM2 at
+  100 kHz. DMA stores packed 12-bit samples in a two-half circular buffer.
+- The acquisition task is released by DMA half/full-complete notifications and
+  checks timestamp/generation continuity.
+- The DSP task applies a Hann window and 1024-point FFT independently to both
+  channels, calculates RMS/peak/dominant frequency, and overwrites a one-entry
+  latest-result queue.
+- The telemetry task compresses Q15 magnitudes to 8-bit values and sends eight
+  bounded packets per result using USART2 TX DMA through the board's ST-LINK
+  virtual COM port at 921600 baud.
+- The watchdog task feeds IWDG only after acquisition, DSP, and telemetry have
+  all reported progress within the voting window.
+- Idle uses `WFI`; deeper STOP-mode claims are deliberately outside this
+  continuous 100 kS/s instrument.
 
-## No-solder reference hardware
-
-| Part | Role | Bus / rate |
-|---|---|---|
-| NUCLEO-F446RE | MCU, Cortex-M4F at 180 MHz | — |
-| SparkFun ICM-20948 Qwiic (SEN-15335) | 9-axis IMU; accel + gyro used first | I2C1 DMA, 200 Hz |
-| Qwiic-to-male jumper cable | Direct connection to NUCLEO headers | — |
-| ST-LINK VCP | telemetry and logs | USART2, 921600 8-N-1 |
-| 8-channel logic analyzer | I2C/UART evidence | — |
-
-No header soldering, pull-up resistor, level shifter, external ST-LINK, or
-USB-to-UART adapter is required for this build. The SparkFun board provides
-regulation, level shifting, and Qwiic connectivity. A breadboard is optional
-for making logic-analyzer tap points. A BMP390 and TMP117 can later be
-daisy-chained over Qwiic without changing the core design.
-
-See [docs/hardware.md](docs/hardware.md) for the wiring and [docs/architecture.md](docs/architecture.md)
-for task priorities, data flow, timing budget, recovery, and power states.
-
-## What is implemented
-
-- FreeRTOS task layout with rate-monotonic priorities and bounded queues
-- I2C and UART transfer contracts designed for DMA completion notifications
-- Two-state Kalman filters for roll and pitch (angle + gyro bias)
-- Optional scalar Kalman filter for a future barometric-altitude extension
-- Stationary IMU calibration with variance/rejection checks
-- Versioned binary UART protocol with sequence numbers, timestamps, status bits,
-  saturation-safe fixed-point fields, and CRC-16/CCITT-FALSE
-- Independent-watchdog health voting (all critical tasks must make progress)
-- NORMAL, IDLE, and STOP power policy with explicit wake behavior
-- Firmware/Python telemetry decoders with bounded resynchronization, detailed
-  error counters, and fault-injection tests
+See [architecture](docs/architecture.md), [protocol](docs/protocol.md), and the
+[timing budget](docs/timing_budget.md).
 
 ## Repository map
 
 ```text
-app/                 FreeRTOS tasks and application orchestration
-core/                Portable fusion, calibration, CRC, and packet encoding
-drivers/             Tested raw sensor conversion helpers
-platform/stm32f446/  Register-level board/DMA/power implementation contract
-include/             Public interfaces
-tools/               Host decoder / CSV logger
-tests/               Portable behavior and protocol tests
-docs/                Architecture, hardware, validation plan
+app/                 FreeRTOS application tasks
+core/                Portable FFT reference, health checks, protocol
+include/             Shared interfaces and data structures
+platform/stm32f446/  HAL/DMA adapter and CMSIS-DSP target backend
+tools/               Python decoder, CSV logger, live plotter
+tests/               C behavior tests and Python fault-injection tests
+docs/                Wiring, architecture, timing, and validation
 ```
 
-## Quick verification (no board required)
-
-Python 3.10+ is sufficient:
+## Verify without hardware
 
 ```powershell
 python -m unittest discover -s tests -v
-python tools/telemetry.py --self-test
-```
-
-On Windows with STM32CubeIDE installed, run the combined verification script:
-
-```powershell
+python tools\spectrum_monitor.py --self-test
 powershell -ExecutionPolicy Bypass -File tools\verify.ps1
 ```
 
-The ten host checks validate CRC, escaping, fixed-point decoding, truncated and
-oversized frames, illegal/dangling escapes, resynchronization, and sequence-loss
-accounting.
+The PowerShell script uses the ARM GCC shipped under `C:\ST`, compiles the
+portable C modules and C test source with warnings as errors, and runs the
+Python suite. This is a compile check, not execution of the ARM objects. If a
+native C compiler and CMake are installed, the portable executable can
+additionally be built and run with CTest.
 
-The C tests also cover stationary fusion, first-sample barometer behavior,
-calibration motion rejection, yaw integration, and raw sensor conversion. They
-run automatically once a C compiler is available through CubeIDE or CMake.
+For live serial input and plotting, install the two host-only packages:
 
-## Firmware integration
-
-This source tree is intended to be added to an STM32CubeIDE/CMake STM32F446
-project containing CMSIS, the STM32F4 device headers/startup code, and FreeRTOS.
-Define `SENSOR_NODE_STM32F446`, enable the FPU, and add the repository `include/`
-directory. The only board-specific functions that must be connected are listed
-in [platform/stm32f446/README.md](platform/stm32f446/README.md).
-
-Suggested compiler flags:
-
-```text
--mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
--ffunction-sections -fdata-sections -Wall -Wextra -Werror
+```powershell
+python -m pip install -r requirements.txt
 ```
 
-Start with the debugger build and `configASSERT` enabled. Do not enable STOP
-mode until DMA transfers and wake-clock restoration have passed the validation
-checklist.
+## Build and run on the board
 
-## Telemetry protocol
-
-Frames use SLIP-style byte stuffing. On the wire:
+Generate the STM32CubeIDE project using the exact settings in
+[platform/stm32f446/README.md](platform/stm32f446/README.md), add these sources,
+and compile the target backend instead of the portable FFT backend. Connect:
 
 ```text
-0x7E | escaped(header + payload + crc16) | 0x7E
+PA4 / A2 (DAC output) -> PA0 / A0 (ADC channel 1)
+PA4 / A2 (DAC output) -> PA1 / A1 (ADC channel 2)
 ```
 
-`0x7E` and `0x7D` inside the frame are escaped as `0x7D` followed by the byte
-XOR `0x20`. All multibyte values are little-endian. Packet type `0x01` is the
-44-byte telemetry payload described in [docs/protocol.md](docs/protocol.md).
+Open the ST-LINK virtual COM port at 921600 8-N-1, then run:
 
-## Evidence to capture on hardware
+```powershell
+python tools\spectrum_monitor.py --port COM5 --baud 921600 --plot --csv capture.csv
+```
 
-The code is only half the project. For a strong portfolio demonstration, attach:
+The expected built-in tone is FFT bin 10:
+`100000 * 10 / 1024 = 976.5625 Hz`. Replace `COM5` with the enumerated port.
 
-1. Logic-analyzer traces showing the 200 Hz I2C burst and DMA-complete ISR.
-2. Runtime-stat screenshots showing deadlines and CPU load under UART pressure.
-3. A six-position IMU calibration report and stationary/no-motion Allan-style plot.
-4. Watchdog recovery video with the fault-injection pin held active.
-5. Current measurements in NORMAL, IDLE, and STOP states.
+## Resume wording
 
-Use [docs/validation.md](docs/validation.md) as the acceptance sheet.
+Use these bullets only after the hardware acceptance sheet passes:
+
+- Developed a dual-channel real-time spectrum analyzer on STM32F446 using
+  timer-triggered simultaneous ADC sampling, DMA ping-pong buffering, and a
+  CMSIS-DSP 1024-point Q15 FFT at 100 kS/s per channel.
+- Designed a priority-scheduled FreeRTOS acquisition/DSP/telemetry pipeline and
+  streamed bounded CRC-protected binary frames over USART DMA at 20 Hz.
+- Validated frequency accuracy, end-to-end latency, task stack margin, watchdog
+  recovery, and protocol fault handling using DAC loopback, GPIO timing traces,
+  and automated Python tests.
+
+Before hardware validation, change “Developed/Validated” to
+“Implemented the software architecture for” and “Host-tested.”
 
 ## License
 
-MIT. The no-solder build targets ICM-20948 WHO_AM_I `0xEA` at I2C address
-`0x69`. Sensor register definitions must still be checked against the exact
-silicon revision received.
+MIT.

@@ -1,225 +1,185 @@
-#include "calibration.h"
-#include "fusion.h"
+#include "analyzer_types.h"
 #include "health_monitor.h"
-#include "sensor_codec.h"
+#include "spectrum.h"
 #include "telemetry.h"
 
 #include <assert.h>
 #include <math.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+#define PI_D 3.14159265358979323846
+
+static void make_tone(int16_t *samples, uint32_t sample_rate_hz,
+                      float frequency_hz, float amplitude) {
+    for (size_t i = 0u; i < ANALYZER_FFT_SIZE; ++i) {
+        const double phase = 2.0 * PI_D * frequency_hz * (double)i /
+                             (double)sample_rate_hz;
+        samples[i] = (int16_t)lround(sin(phase) * amplitude * 32767.0);
+    }
+}
+
 static void test_crc(void) {
     static const uint8_t vector[] = "123456789";
-    assert(crc16_ccitt_false(vector, 9u) == 0x29B1u);
+    assert(crc16_ccitt_false(vector, sizeof(vector) - 1u) == 0x29B1u);
 }
 
-static void test_stationary_fusion(void) {
-    fusion_filter_t filter;
-    fused_state_t state = {0};
-    fusion_init(&filter, 101325.0f);
-    for (uint32_t i = 1u; i <= 5000u; ++i) {
-        const imu_sample_t sample = {
-            .timestamp_us = i * 1000u,
-            .accel_mps2 = {0.0f, 0.0f, 9.80665f},
-            .gyro_rads = {0.0f, 0.0f, 0.0f},
-            .imu_temp_c = 25.0f
-        };
-        assert(fusion_update_imu(&filter, &sample, &state));
+static void test_exact_bin_spectrum(void) {
+    static spectrum_workspace_t workspace;
+    static int16_t samples[ANALYZER_FFT_SIZE];
+    channel_spectrum_t result;
+    make_tone(samples, 102400u, 1000.0f, 0.8f);
+    spectrum_workspace_init(&workspace);
+    assert(spectrum_analyze_q15(&workspace, samples, 102400u, &result));
+    assert(result.dominant_millihz > 995000u);
+    assert(result.dominant_millihz < 1005000u);
+    const float rms = result.rms_q15 / 32768.0f;
+    assert(rms > 0.560f && rms < 0.570f);
+    assert(result.magnitude_q15[10] > 25000u);
+}
+
+static void test_off_bin_interpolation(void) {
+    static spectrum_workspace_t workspace;
+    static int16_t samples[ANALYZER_FFT_SIZE];
+    channel_spectrum_t result;
+    make_tone(samples, 100000u, 440.0f, 0.6f);
+    assert(spectrum_analyze_q15(&workspace, samples, 100000u, &result));
+    assert(result.dominant_millihz > 425000u);
+    assert(result.dominant_millihz < 455000u);
+}
+
+static void fill_result(spectrum_result_t *result) {
+    memset(result, 0, sizeof(*result));
+    result->timestamp_us = 123456u;
+    result->generation = 9u;
+    result->sample_rate_hz = 100000u;
+    result->processing_us = 2300u;
+    result->dropped_blocks = 2u;
+    result->status = STATUS_ADC_RUNNING | STATUS_SIGNAL_VALID;
+    result->channel[1].rms_q15 = 12000u;
+    result->channel[1].peak_q15 = 20000u;
+    result->channel[1].dominant_millihz = 4000000u;
+    for (size_t i = 0u; i < ANALYZER_SPECTRUM_BINS; ++i) {
+        result->channel[1].magnitude_q15[i] = (uint16_t)(i * 17u);
     }
-    assert(fabsf(state.roll_rad) < 1.0e-4f);
-    assert(fabsf(state.pitch_rad) < 1.0e-4f);
-    assert((state.status & STATUS_IMU_VALID) != 0u);
-}
-
-static void test_baro_validation(void) {
-    fusion_filter_t filter;
-    fused_state_t state = {0};
-    fusion_init(&filter, 101325.0f);
-    const baro_sample_t valid = {20000u, 101325.0f, 25.0f};
-    const baro_sample_t invalid = {40000u, 0.0f, 25.0f};
-    assert(fusion_update_baro(&filter, &valid, &state));
-    assert(fabsf(state.altitude_m) < 1.0e-3f);
-    assert(!fusion_update_baro(&filter, &invalid, &state));
-    assert((state.status & STATUS_NUMERIC_FAULT) != 0u);
-}
-
-static void test_baro_first_sample_has_no_velocity_spike(void) {
-    fusion_filter_t filter;
-    fused_state_t state = {0};
-    fusion_init(&filter, 101325.0f);
-    const baro_sample_t sample = {20000u, 90000.0f, 25.0f};
-    assert(fusion_update_baro(&filter, &sample, &state));
-    assert(state.altitude_m > 900.0f);
-    assert(fabsf(state.vertical_speed_mps) < 1.0e-6f);
-}
-
-static void test_yaw_uses_z_rate_only(void) {
-    fusion_filter_t filter;
-    fused_state_t state = {0};
-    fusion_init(&filter, 101325.0f);
-    filter.roll.bias = 0.5f;
-    filter.pitch.bias = -0.3f;
-    const imu_sample_t sample = {
-        .timestamp_us = 1000u,
-        .accel_mps2 = {0.0f, 0.0f, 9.80665f},
-        .gyro_rads = {0.0f, 0.0f, 1.0f}
-    };
-    assert(fusion_update_imu(&filter, &sample, &state));
-    assert(fabsf(state.yaw_rad - 0.001f) < 1.0e-6f);
-}
-
-static void test_calibration_rejects_motion(void) {
-    calibration_accumulator_t acc;
-    imu_calibration_t cal;
-    calibration_begin(&acc);
-    for (uint32_t i = 0; i < 1000u; ++i) {
-        imu_sample_t sample = {
-            .accel_mps2 = {0.0f, 0.0f, 9.80665f},
-            .gyro_rads = {(i & 1u) ? 0.1f : -0.1f, 0.0f, 0.0f}
-        };
-        calibration_push(&acc, &sample);
+    for (size_t i = 0u; i < ANALYZER_PREVIEW_SAMPLES; ++i) {
+        result->channel[1].preview_q15[i] = (int16_t)(i * 101 - 6000);
     }
-    assert(!calibration_finish(&acc, &cal));
 }
 
-static void test_telemetry_capacity(void) {
-    fused_state_t state = {0};
-    uint8_t tiny[4];
-    uint8_t frame[TELEMETRY_MAX_FRAME];
-    assert(telemetry_encode_state(0u, &state, tiny, sizeof(tiny)) == 0u);
-    const size_t length = telemetry_encode_state(0u, &state, frame, sizeof(frame));
-    assert(length >= 54u && length <= TELEMETRY_MAX_FRAME);
-    assert(frame[0] == TELEMETRY_SOF && frame[length - 1u] == TELEMETRY_SOF);
-}
-
-static telemetry_decode_result_t feed_frame(telemetry_decoder_t *decoder,
-                                             const uint8_t *frame,
-                                             size_t length,
-                                             fused_state_t *decoded,
-                                             uint16_t *sequence) {
-    telemetry_decode_result_t result = TELEMETRY_DECODE_NONE;
-    for (size_t i = 0u; i < length; ++i) {
-        const telemetry_decode_result_t current = telemetry_decoder_feed(
-            decoder, frame[i], decoded, sequence);
-        if (current != TELEMETRY_DECODE_NONE) result = current;
-    }
-    return result;
-}
-
-static void test_firmware_decoder_and_resync(void) {
-    fused_state_t source = {
-        .timestamp_us = 123456u,
-        .roll_rad = 0.25f,
-        .pitch_rad = -0.5f,
-        .temperature_c = 25.125f,
-        .status = STATUS_IMU_VALID
-    };
-    uint8_t frame[TELEMETRY_MAX_FRAME];
-    size_t length = telemetry_encode_state(10u, &source, frame, sizeof(frame));
-    assert(length != 0u);
+static void test_telemetry_round_trip(void) {
+    spectrum_result_t result;
+    fill_result(&result);
+    uint8_t encoded[TELEMETRY_MAX_FRAME];
+    const size_t length = telemetry_encode_spectrum_chunk(
+        65535u, &result, 1u, 2u, encoded, sizeof(encoded));
+    assert(length > TELEMETRY_RAW_SPECTRUM_LEN);
 
     telemetry_decoder_t decoder;
+    spectrum_chunk_t chunk;
     telemetry_decoder_init(&decoder);
-    fused_state_t decoded = {0};
-    uint16_t sequence = 0u;
-    assert(feed_frame(&decoder, frame, length, &decoded, &sequence) ==
-           TELEMETRY_DECODE_FRAME);
-    assert(sequence == 10u);
-    assert(fabsf(decoded.roll_rad - source.roll_rad) < 1.0e-6f);
-
-    /* Oversized garbage is dropped until a delimiter, then a valid frame
-     * must decode without resetting the state machine. */
-    assert(telemetry_decoder_feed(&decoder, TELEMETRY_SOF, &decoded,
-                                  &sequence) == TELEMETRY_DECODE_NONE);
-    for (size_t i = 0u; i <= TELEMETRY_RAW_STATE_LEN; ++i) {
-        (void)telemetry_decoder_feed(&decoder, 0x55u, &decoded, &sequence);
+    telemetry_decode_result_t decoded = TELEMETRY_DECODE_NONE;
+    for (size_t i = 0u; i < length; ++i) {
+        const telemetry_decode_result_t current = telemetry_decoder_feed(
+            &decoder, encoded[i], &chunk);
+        if (current == TELEMETRY_DECODE_FRAME) decoded = current;
     }
-    (void)telemetry_decoder_feed(&decoder, TELEMETRY_SOF, &decoded, &sequence);
-    length = telemetry_encode_state(13u, &source, frame, sizeof(frame));
-    assert(feed_frame(&decoder, frame, length, &decoded, &sequence) ==
-           TELEMETRY_DECODE_FRAME);
-    assert(decoder.stats.overflow_errors == 1u);
-    assert(decoder.stats.resync_events == 1u);
-    assert(decoder.stats.sequence_lost == 2u);
-
-    const uint8_t bad_escape[] = {TELEMETRY_SOF, TELEMETRY_ESC, 0x00u,
-                                  TELEMETRY_SOF};
-    assert(feed_frame(&decoder, bad_escape, sizeof(bad_escape), &decoded,
-                      &sequence) == TELEMETRY_DECODE_ERROR);
-    assert(decoder.stats.escape_errors == 1u);
+    assert(decoded == TELEMETRY_DECODE_FRAME);
+    assert(chunk.sequence == 65535u);
+    assert(chunk.channel == 1u && chunk.chunk_index == 2u);
+    assert(chunk.bin_start == 256u && chunk.bin_count == 128u);
+    assert(chunk.dominant_millihz == 4000000u);
+    assert(chunk.magnitude_u8[3] ==
+           (uint8_t)((result.channel[1].magnitude_q15[259] + 64u) >> 7));
+    assert(chunk.preview_q15[3] == result.channel[1].preview_q15[67]);
+    assert(decoder.stats.frames_ok == 1u);
 }
 
-static void test_sensor_codecs(void) {
-    const uint8_t icm[14] = {
-        0x08u, 0x00u, 0xF8u, 0x00u, 0x00u, 0x00u,
-        0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x10u,
-        0x00u, 0x00u
-    };
-    imu_sample_t sample;
-    assert(icm20948_decode_16g_2000dps(icm, 1234u, &sample));
-    assert(fabsf(sample.accel_mps2[0] - 9.80665f) < 1.0e-4f);
-    assert(fabsf(sample.accel_mps2[1] + 9.80665f) < 1.0e-4f);
-    assert(sample.gyro_rads[2] > 0.0f);
-    assert(fabsf(sample.imu_temp_c - 21.0f) < 1.0e-6f);
-    assert(sample.timestamp_us == 1234u);
-
-    const uint8_t tmp_positive[2] = {0x0Cu, 0x80u};
-    const uint8_t tmp_negative[2] = {0xF6u, 0x00u};
-    assert(fabsf(tmp117_decode_temperature(tmp_positive) - 25.0f) < 1.0e-6f);
-    assert(fabsf(tmp117_decode_temperature(tmp_negative) + 20.0f) < 1.0e-6f);
-
-    const uint8_t bmp[6] = {0x56u, 0x34u, 0x12u, 0xEFu, 0xCDu, 0xABu};
-    bmp390_raw_sample_t raw;
-    assert(bmp390_decode_raw(bmp, &raw));
-    assert(raw.pressure_adc == 0x123456u);
-    assert(raw.temperature_adc == 0xABCDEFu);
-
-    bmp390_calibration_t calibration = {0};
-    calibration.par_p5 = 100000.0;
-    const bmp390_raw_sample_t compensated_raw = {500000u, 500000u};
-    float pressure;
-    float temperature;
-    assert(bmp390_compensate(&compensated_raw, &calibration,
-                             &pressure, &temperature));
-    assert(fabsf(pressure - 100000.0f) < 0.1f);
-    assert(fabsf(temperature) < 1.0e-6f);
+static void test_telemetry_magnitude_saturates(void) {
+    spectrum_result_t result;
+    fill_result(&result);
+    result.channel[0].magnitude_q15[0] = 32767u;
+    uint8_t encoded[TELEMETRY_MAX_FRAME];
+    const size_t length = telemetry_encode_spectrum_chunk(
+        1u, &result, 0u, 0u, encoded, sizeof(encoded));
+    telemetry_decoder_t decoder;
+    spectrum_chunk_t chunk;
+    telemetry_decoder_init(&decoder);
+    for (size_t i = 0u; i < length; ++i) {
+        (void)telemetry_decoder_feed(&decoder, encoded[i], &chunk);
+    }
+    assert(chunk.magnitude_u8[0] == 255u);
 }
 
-static void test_data_health_is_separate_from_liveness(void) {
-    data_health_monitor_t monitor;
-    data_health_init(&monitor);
-    imu_sample_t sample = {
-        .timestamp_us = 1000u,
-        .accel_mps2 = {0.0f, 0.0f, 9.80665f},
-        .gyro_rads = {0.0f, 0.0f, 0.0f},
-        .imu_temp_c = 25.0f
+static void test_decoder_recovers_after_corruption(void) {
+    spectrum_result_t result;
+    fill_result(&result);
+    uint8_t frame[TELEMETRY_MAX_FRAME];
+    size_t length = telemetry_encode_spectrum_chunk(
+        1u, &result, 0u, 0u, frame, sizeof(frame));
+    assert(length != 0u);
+    for (size_t i = 8u; i + 1u < length; ++i) {
+        if (frame[i] != TELEMETRY_SOF && frame[i] != TELEMETRY_ESC &&
+            (uint8_t)(frame[i] ^ 1u) != TELEMETRY_SOF &&
+            (uint8_t)(frame[i] ^ 1u) != TELEMETRY_ESC) {
+            frame[i] ^= 1u;
+            break;
+        }
+    }
+    telemetry_decoder_t decoder;
+    spectrum_chunk_t chunk;
+    telemetry_decoder_init(&decoder);
+    for (size_t i = 0u; i < length; ++i) {
+        (void)telemetry_decoder_feed(&decoder, frame[i], &chunk);
+    }
+    assert(decoder.stats.crc_errors == 1u);
+    length = telemetry_encode_spectrum_chunk(
+        2u, &result, 0u, 0u, frame, sizeof(frame));
+    telemetry_decode_result_t final = TELEMETRY_DECODE_NONE;
+    for (size_t i = 0u; i < length; ++i) {
+        final = telemetry_decoder_feed(&decoder, frame[i], &chunk);
+    }
+    assert(final == TELEMETRY_DECODE_FRAME);
+    assert(chunk.sequence == 2u);
+}
+
+static void test_acquisition_health(void) {
+    uint32_t samples[ANALYZER_FFT_SIZE] = {0u};
+    adc_dma_block_t block = {
+        .packed_samples = samples,
+        .timestamp_us = 10000u,
+        .generation = 1u,
+        .frames = ANALYZER_FFT_SIZE
     };
-    assert(data_health_check_imu(&monitor, &sample, true) == DATA_FAULT_NONE);
-    sample.timestamp_us = 2000u;
-    sample.accel_mps2[2] = 12.0f;
-    assert((data_health_check_imu(&monitor, &sample, true) &
-            DATA_FAULT_STATIONARY) != 0u);
-    sample.timestamp_us = 2000u;
-    sample.accel_mps2[2] = 9.80665f;
-    assert((data_health_check_imu(&monitor, &sample, false) &
-            DATA_FAULT_TIMESTAMP) != 0u);
-    assert(monitor.imu_rejected == 2u);
-    assert(monitor.timestamp_faults == 1u);
+    acquisition_health_t monitor;
+    acquisition_health_init(&monitor);
+    assert(acquisition_health_check(&monitor, &block, 10240u) ==
+           STATUS_ADC_RUNNING);
+    block.generation = 3u;
+    block.timestamp_us += 20480u;
+    const uint32_t status = acquisition_health_check(&monitor, &block, 10240u);
+    assert((status & STATUS_BLOCK_GAP) != 0u);
+    assert(monitor.dropped_blocks == 1u);
+}
+
+static void test_spectrum_health(void) {
+    spectrum_result_t result;
+    fill_result(&result);
+    result.processing_us = 9001u;
+    assert((spectrum_health_check(&result, 9000u) & STATUS_DSP_DEADLINE) != 0u);
+    result.channel[0].dominant_millihz = 51000000u;
+    assert((spectrum_health_check(&result, 9000u) & STATUS_NUMERIC_FAULT) != 0u);
 }
 
 int main(void) {
     test_crc();
-    test_stationary_fusion();
-    test_baro_validation();
-    test_baro_first_sample_has_no_velocity_spike();
-    test_yaw_uses_z_rate_only();
-    test_calibration_rejects_motion();
-    test_telemetry_capacity();
-    test_firmware_decoder_and_resync();
-    test_sensor_codecs();
-    test_data_health_is_separate_from_liveness();
+    test_exact_bin_spectrum();
+    test_off_bin_interpolation();
+    test_telemetry_round_trip();
+    test_telemetry_magnitude_saturates();
+    test_decoder_recovers_after_corruption();
+    test_acquisition_health();
+    test_spectrum_health();
     puts("core tests: PASS");
     return 0;
 }

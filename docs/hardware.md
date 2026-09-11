@@ -1,31 +1,34 @@
-# Hardware and wiring
+# Minimum hardware and wiring
 
-## No-solder minimum build
+## Required
 
-Use a NUCLEO-F446RE, SparkFun ICM-20948 Qwiic breakout (`SEN-15335`), and one
-Qwiic-to-male jumper cable. The male ends plug directly into the NUCLEO female
-headers; no loose pin header or breadboard contact is used.
+| Item | Quantity | Note |
+|---|---:|---|
+| NUCLEO-F446RE | 1 | includes ST-LINK debugger and virtual COM port |
+| USB-A to Mini-USB data cable | 1 | many listings incorrectly say Micro-USB; the board uses Mini-USB |
+| male-to-male jumper wire | 2 | PA4 to PA0 and PA4 to PA1 |
 
-| Signal | STM32 pin | Destination |
+No breadboard, resistor, soldering iron, signal generator, external ST-LINK,
+USB-to-UART adapter, or sensor is required for the first hardware milestone.
+
+## Loopback wiring
+
+Power the board only from its ST-LINK USB connector. With power disconnected,
+connect the Arduino-header aliases:
+
+| Source | Destination | Purpose |
 |---|---|---|
-| I2C1_SCL | PB8 | Qwiic yellow / ICM-20948 SCL |
-| I2C1_SDA | PB9 | Qwiic blue / ICM-20948 SDA |
-| USART2_TX | PA2 | ST-LINK VCP RX |
-| GND | GND | Qwiic black |
-| 3V3 | 3V3 | Qwiic red |
+| A2 / PA4 / DAC_OUT1 | A0 / PA0 / ADC1_IN0 | channel 1 self-test |
+| A2 / PA4 / DAC_OUT1 | A1 / PA1 / ADC2_IN1 | channel 2 self-test |
 
-The SparkFun breakout includes regulation and logic-level translation. Do not
-add the generic level-shifter assortment or external I2C pull-ups. Keep the
-Qwiic cable short and configure I2C1 for 400 kHz.
+One output may drive these two high-impedance ADC inputs for this low-frequency
+validation. Never connect phone/headphone audio directly: it can swing below
+ground and exceed the ADC input range. An external signal requires biasing and
+protection designed for 0..3.3 V.
 
-The default ICM-20948 address is `0x69`; WHO_AM_I must be `0xEA`. Verify both at
-startup and refuse to publish `STATUS_IMU_VALID` if the ID does not match.
+## Optional evidence equipment
 
-## Optional environmental extension
-
-Set `ENABLE_ENV_SENSORS` to `1`, then daisy-chain Qwiic BMP390 (`0x77`) and
-TMP117 (`0x48`) breakouts. Their addresses do not conflict. This phase is not
-required for the minimum resume-ready hardware validation.
-
-The NUCLEO virtual COM port is commonly wired to USART2. Check solder bridges
-for the exact board revision before attaching another UART adapter.
+An inexpensive 8-channel 24 MHz logic analyzer can capture UART and timing
+GPIO markers. It cannot observe DMA memory transfers directly; firmware must
+toggle spare GPIO pins at DMA callbacks and DSP entry/exit. An oscilloscope is
+helpful for analog quality but not required for the minimum result.

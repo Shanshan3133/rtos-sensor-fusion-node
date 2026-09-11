@@ -25,3 +25,7 @@ void vApplicationMallocFailedHook(void) {
     taskDISABLE_INTERRUPTS();
     for (;;) { }
 }
+
+void vApplicationIdleHook(void) {
+    platform_idle();
+}

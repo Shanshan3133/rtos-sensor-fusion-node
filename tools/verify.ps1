@@ -10,7 +10,7 @@ Write-Host '[1/3] Running Python telemetry tests'
 Push-Location $projectRoot
 try {
     python -m unittest discover -s tests -v
-    python tools\telemetry.py --self-test
+    python tools\spectrum_monitor.py --self-test
 
     Write-Host '[2/3] Locating STM32 ARM GCC'
     $compiler = Get-ChildItem -LiteralPath $cubeRoot -Recurse `
@@ -29,11 +29,9 @@ try {
         '-mfpu=fpv4-sp-d16', '-mfloat-abi=hard', '-c'
     )
     $sources = @(
-        'core\calibration.c',
-        'core\fusion.c',
         'core\health_monitor.c',
+        'core\spectrum.c',
         'core\telemetry.c',
-        'drivers\sensor_codec.c',
         'tests\test_core.c'
     )
     foreach ($source in $sources) {
@@ -41,7 +39,7 @@ try {
         & $compiler @flags $source '-o' (Join-Path $buildDir $objectName)
         if ($LASTEXITCODE -ne 0) { throw "Compilation failed: $source" }
     }
-    Write-Host 'All verification checks passed.'
+    Write-Host 'All checks passed. Note: ARM objects were compiled, not executed.'
 }
 finally {
     Pop-Location

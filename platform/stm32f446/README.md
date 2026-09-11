@@ -1,40 +1,54 @@
-# STM32F446 board-support contract
+# STM32CubeIDE integration for NUCLEO-F446RE
 
-`board.c` is intentionally register-level and does not depend on STM32 HAL.
-Complete the ICM-20948 I2C transaction routine against the exact board revision.
-The BMP390/TMP117 routines are optional when `ENABLE_ENV_SENSORS` is zero.
+Create a new STM32 project for `NUCLEO-F446RE`. Generate HAL and FreeRTOS code,
+then add `app/`, `core/health_monitor.c`, `core/telemetry.c`,
+`platform/stm32f446/board_skeleton.c`, and
+`platform/stm32f446/spectrum_cmsis.c`. Do not compile `core/spectrum.c` in the
+target build. Add `include/` and CMSIS-DSP include paths and define:
 
-Expected resource map:
+```text
+ANALYZER_STM32F446
+ANALYZER_USE_CMSIS_DSP
+ARM_MATH_CM4
+```
 
-| Function | Peripheral | DMA stream/channel | IRQ priority |
-|---|---|---|---|
-| IMU/environment RX | I2C1 | DMA1 S0, channel 1 | 6 |
-| IMU/environment TX | I2C1 | DMA1 S7, channel 1 | 6 |
-| Telemetry TX | USART2 | DMA1 S6, channel 4 | 8 |
-| FreeRTOS tick | SysTick | — | 15 |
+Use hard-float Cortex-M4 options and link CMSIS-DSP plus `libm`.
 
-DMA interrupt priorities must be numerically equal to or greater than
-`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY`, because the completion ISRs use
-`vTaskNotifyGiveFromISR`. The minimum build schedules a 200 Hz read. An optional
-EXTI data-ready input should only release the task; never perform I2C work in
-the ISR.
+## Peripheral configuration
 
-I2C1 TX deliberately uses Stream 7. Although Stream 6 supports both I2C1_TX
-channel 1 and USART2_TX channel 4, a DMA stream cannot serve both peripherals
-concurrently; assigning USART telemetry and environmental sampling to Stream 6
-would create an intermittent runtime collision.
+| Resource | Required setting |
+|---|---|
+| system clock | 180 MHz, valid APB prescalers, FPU enabled |
+| TIM2 | update/TRGO at exactly 100 kHz; master output trigger = update |
+| ADC1 | IN0/PA0, 12 bit, external trigger TIM2 TRGO, rising edge |
+| ADC2 | IN1/PA1, same trigger and sample time as ADC1 |
+| ADC multimode | dual regular simultaneous; DMA access mode for packed CDR; continuous DMA requests |
+| ADC DMA | circular, peripheral word, memory word, 2048 words, half/full IRQ |
+| DAC1 | OUT1/PA4, trigger TIM2 TRGO, output buffer enabled |
+| DAC DMA | circular, memory word, peripheral word, 1024 entries |
+| USART2 | asynchronous 921600, 8-N-1, TX PA2 routed to ST-LINK VCP |
+| USART2 TX DMA | DMA1 Stream 6, Channel 4, normal mode |
+| IWDG | approximately 1 s timeout; exact value depends on measured LSI |
 
-Required implementation sequence:
+Use ADC sampling time sufficient for the board's source impedance; 15 cycles or
+longer is a safe starting point for the DAC loopback. Verify conversion time is
+comfortably below the 10 us trigger interval.
 
-1. Enable FPU access before any floating-point task starts.
-2. Configure HSE/PLL for 180 MHz and APB clocks within STM32F446 limits.
-3. Enable DWT CYCCNT for the wrap-safe microsecond timestamp.
-4. Configure GPIO alternate functions before enabling peripherals.
-5. Clear every DMA flag before enabling a stream.
-6. On a timeout, disable the stream, wait for EN to clear, clear flags, and
-   reset/reinitialize the peripheral.
-7. Check ICM-20948 WHO_AM_I (`0xEA`) before starting acquisition.
-8. Restore PLL/system clock after STOP before resuming the scheduler.
+DMA/UART interrupt priorities that call FreeRTOS `FromISR` APIs must be
+numerically equal to or greater than
+`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY`. Enable `configASSERT`, stack
+overflow hook, malloc-failed hook, and idle hook. A 1 kHz RTOS tick is adequate.
 
-The application never feeds the watchdog from an ISR or idle hook. That is
-deliberate: a live interrupt stream must not disguise deadlocked tasks.
+## Important board fact
+
+The NUCLEO-F446RE's onboard USB connector belongs to ST-LINK. The target MCU
+does not have an onboard user USB connector, so this minimum build does not
+claim native target USB CDC. USART2 reaches the PC through the ST-LINK virtual
+COM bridge using the same Mini-USB cable.
+
+## First run
+
+1. Disable IWDG while bringing up clocks and ADC/DMA.
+2. Connect PA4/A2 to PA0/A0 and PA1/A1 with power off.
+3. Flash, start the Python monitor at 921600 baud, and confirm 976.5625 Hz.
+4. Re-enable IWDG, run the acceptance checklist, and record evidence.

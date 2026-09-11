@@ -1,10 +1,10 @@
 #include "app.h"
 
+#include "analyzer_types.h"
 #include "app_config.h"
-#include "calibration.h"
-#include "fusion.h"
 #include "health_monitor.h"
 #include "platform.h"
+#include "spectrum.h"
 #include "telemetry.h"
 
 #include "FreeRTOS.h"
@@ -13,27 +13,21 @@
 
 #include <string.h>
 
-static QueueHandle_t imu_queue;
-#if ENABLE_ENV_SENSORS
-static QueueHandle_t baro_queue;
-static QueueHandle_t temp_queue;
-#endif
-static QueueHandle_t state_queue;
+static QueueHandle_t block_queue;
+static QueueHandle_t result_queue;
+static StaticQueue_t block_queue_control;
+static StaticQueue_t result_queue_control;
+static uint8_t block_queue_storage[2u * sizeof(adc_dma_block_t)];
+static uint8_t result_queue_storage[sizeof(spectrum_result_t)];
+
+static spectrum_workspace_t spectrum_workspace[ANALYZER_CHANNELS];
+static int16_t channel_samples[ANALYZER_CHANNELS][ANALYZER_FFT_SIZE];
+/* Task-owned static buffers keep large FFT results off the FreeRTOS stacks. */
+static spectrum_result_t dsp_result;
+static spectrum_result_t telemetry_result;
+static uint8_t telemetry_frame[TELEMETRY_MAX_FRAME];
 static volatile uint32_t health_mask;
 static volatile uint32_t sticky_status;
-
-static StaticQueue_t imu_queue_control;
-#if ENABLE_ENV_SENSORS
-static StaticQueue_t baro_queue_control;
-static StaticQueue_t temp_queue_control;
-#endif
-static StaticQueue_t state_queue_control;
-static uint8_t imu_queue_storage[IMU_QUEUE_DEPTH * sizeof(imu_sample_t)];
-#if ENABLE_ENV_SENSORS
-static uint8_t baro_queue_storage[BARO_QUEUE_DEPTH * sizeof(baro_sample_t)];
-static uint8_t temp_queue_storage[TEMP_QUEUE_DEPTH * sizeof(temp_sample_t)];
-#endif
-static uint8_t state_queue_storage[TELEMETRY_QUEUE_DEPTH * sizeof(fused_state_t)];
 
 static void status_set(uint32_t bits) {
     taskENTER_CRITICAL();
@@ -48,175 +42,121 @@ static uint32_t status_get(void) {
     return value;
 }
 
-static void report_data_fault(uint32_t faults) {
-    if ((faults & DATA_FAULT_TIMESTAMP) != 0u) {
-        status_set(STATUS_TIMESTAMP_FAULT);
-    }
-    if ((faults & ~DATA_FAULT_TIMESTAMP) != 0u) {
-        status_set(STATUS_DATA_IMPLAUSIBLE);
-    }
-}
-
 void app_health_kick(uint32_t task_bit) {
     taskENTER_CRITICAL();
     health_mask |= task_bit;
     taskEXIT_CRITICAL();
 }
 
-static void replace_latest(QueueHandle_t queue, const void *item,
-                           uint32_t overrun_bit) {
-    if (xQueueSend(queue, item, 0u) != pdPASS) {
-        uint8_t discarded[sizeof(fused_state_t)];
-        (void)xQueueReceive(queue, discarded, 0u);
-        (void)xQueueSend(queue, item, 0u);
-        status_set(overrun_bit);
-    }
-}
-
-static void imu_task(void *argument) {
+static void acquisition_task(void *argument) {
     (void)argument;
-    TickType_t wake = xTaskGetTickCount();
-    unsigned failures = 0u;
-    calibration_accumulator_t calibration_acc;
-    imu_calibration_t calibration;
-    bool calibration_ready = false;
-    data_health_monitor_t data_health;
-    data_health_init(&data_health);
-    calibration_begin(&calibration_acc);
-    for (;;) {
-        imu_sample_t sample;
-        if (platform_imu_read_dma(&sample, 2u)) {
-            failures = 0u;
-            const uint32_t faults = data_health_check_imu(
-                &data_health, &sample, !calibration_ready);
-            if (faults != DATA_FAULT_NONE) {
-                report_data_fault(faults);
-            } else if (!calibration_ready) {
-                calibration_push(&calibration_acc, &sample);
-                if (calibration_acc.count >= 2000u) {
-                    calibration_ready = calibration_finish(&calibration_acc,
-                                                           &calibration);
-                    if (!calibration_ready) calibration_begin(&calibration_acc);
-                }
-            } else {
-                calibration_apply(&calibration, &sample);
-                status_set(STATUS_CALIBRATED);
-            }
-            if (faults == DATA_FAULT_NONE) {
-                replace_latest(imu_queue, &sample, STATUS_IMU_OVERRUN);
-            }
-        } else if (++failures >= 3u) {
-            platform_sensor_bus_recover();
-            status_set(STATUS_SENSOR_RECOVERY);
-            failures = 0u;
-        }
-        /* Liveness is independent of transaction/data validity. */
-        app_health_kick(HEALTH_IMU);
-        vTaskDelayUntil(&wake, pdMS_TO_TICKS(1000u / IMU_SAMPLE_HZ));
-    }
-}
-
-#if ENABLE_ENV_SENSORS
-static void environment_task(void *argument) {
-    (void)argument;
-    TickType_t wake = xTaskGetTickCount();
-    unsigned divider = 0u;
-    data_health_monitor_t data_health;
-    data_health_init(&data_health);
-    for (;;) {
-        baro_sample_t baro;
-        if (platform_baro_read_dma(&baro, 5u)) {
-            const uint32_t faults = data_health_check_baro(&data_health, &baro);
-            if (faults == DATA_FAULT_NONE) {
-                replace_latest(baro_queue, &baro, STATUS_BARO_OVERRUN);
-            } else {
-                report_data_fault(faults);
-            }
-        }
-        if ((divider++ % (BARO_SAMPLE_HZ / TEMP_SAMPLE_HZ)) == 0u) {
-            temp_sample_t temp;
-            if (platform_temp_read_dma(&temp, 5u)) {
-                const uint32_t faults = data_health_check_temp(&data_health,
-                                                               &temp);
-                if (faults == DATA_FAULT_NONE) {
-                    replace_latest(temp_queue, &temp, 0u);
-                } else {
-                    report_data_fault(faults);
-                }
-            }
-        }
-        app_health_kick(HEALTH_ENV);
-        vTaskDelayUntil(&wake, pdMS_TO_TICKS(1000u / BARO_SAMPLE_HZ));
-    }
-}
-#endif
-
-static void fusion_task(void *argument) {
-    (void)argument;
-    fusion_filter_t filter;
-    fused_state_t state;
-#if ENABLE_ENV_SENSORS
-    temp_sample_t temperature;
-#endif
-    TickType_t last_publish = 0u;
-    memset(&state, 0, sizeof(state));
-    fusion_init(&filter, 101325.0f);
+    acquisition_health_t monitor;
+    acquisition_health_init(&monitor);
+    configASSERT(platform_adc_start());
+    if (platform_test_signal_active()) status_set(STATUS_TEST_SIGNAL);
+    const uint32_t block_period_us =
+        (ADC_DMA_FRAMES_PER_HALF * 1000000u) / ADC_SAMPLE_RATE_HZ;
 
     for (;;) {
-        imu_sample_t imu;
-        if (xQueueReceive(imu_queue, &imu, pdMS_TO_TICKS(10u)) != pdPASS) {
-            app_health_kick(HEALTH_FUSION);
+        adc_dma_block_t block;
+        if (!platform_adc_wait_block(&block, ADC_BLOCK_TIMEOUT_MS)) {
+            status_set(STATUS_ADC_OVERRUN);
+            app_health_kick(HEALTH_ACQUISITION);
             continue;
         }
-        (void)fusion_update_imu(&filter, &imu, &state);
+        status_set(acquisition_health_check(&monitor, &block,
+                                            block_period_us));
+        if (platform_adc_overruns() != 0u) status_set(STATUS_ADC_OVERRUN);
+        if (xQueueSend(block_queue, &block, 0u) != pdPASS) {
+            status_set(STATUS_FRAME_DROPPED);
+        }
+        app_health_kick(HEALTH_ACQUISITION);
+    }
+}
 
-#if ENABLE_ENV_SENSORS
-        baro_sample_t baro;
-        while (xQueueReceive(baro_queue, &baro, 0u) == pdPASS) {
-            (void)fusion_update_baro(&filter, &baro, &state);
-        }
-        while (xQueueReceive(temp_queue, &temperature, 0u) == pdPASS) {
-            state.temperature_c = temperature.temperature_c;
-            state.status |= STATUS_TEMP_VALID;
-        }
-#else
-        state.temperature_c = imu.imu_temp_c;
-        state.status |= STATUS_TEMP_VALID;
-#endif
-        state.status |= status_get();
+static void unpack_dual_adc(const adc_dma_block_t *block) {
+    for (size_t i = 0u; i < ANALYZER_FFT_SIZE; ++i) {
+        const uint32_t packed = block->packed_samples[i];
+        const int32_t adc1 = (int32_t)(packed & 0x0FFFu) - 2048;
+        const int32_t adc2 = (int32_t)((packed >> 16) & 0x0FFFu) - 2048;
+        channel_samples[0][i] = (int16_t)(adc1 << 4);
+        channel_samples[1][i] = (int16_t)(adc2 << 4);
+    }
+}
 
-        const TickType_t now = xTaskGetTickCount();
-        if ((now - last_publish) >= pdMS_TO_TICKS(1000u / FUSION_OUTPUT_HZ)) {
-            replace_latest(state_queue, &state, STATUS_UART_DROP);
-            last_publish = now;
+static void dsp_task(void *argument) {
+    (void)argument;
+    for (unsigned channel = 0u; channel < ANALYZER_CHANNELS; ++channel) {
+        spectrum_workspace_init(&spectrum_workspace[channel]);
+    }
+    for (;;) {
+        adc_dma_block_t block;
+        if (xQueueReceive(block_queue, &block,
+                          pdMS_TO_TICKS(ADC_BLOCK_TIMEOUT_MS)) != pdPASS) {
+            app_health_kick(HEALTH_DSP);
+            continue;
         }
-        app_health_kick(HEALTH_FUSION);
+        memset(&dsp_result, 0, sizeof(dsp_result));
+        dsp_result.timestamp_us = block.timestamp_us;
+        dsp_result.generation = block.generation;
+        dsp_result.sample_rate_hz = ADC_SAMPLE_RATE_HZ;
+        const uint32_t started_us = platform_time_us();
+        unpack_dual_adc(&block);
+        for (unsigned channel = 0u; channel < ANALYZER_CHANNELS; ++channel) {
+            if (!spectrum_analyze_q15(&spectrum_workspace[channel],
+                                      channel_samples[channel],
+                                      ADC_SAMPLE_RATE_HZ,
+                                      &dsp_result.channel[channel])) {
+                dsp_result.status |= STATUS_NUMERIC_FAULT;
+            }
+            for (size_t i = 0u; i < ANALYZER_PREVIEW_SAMPLES; ++i) {
+                dsp_result.channel[channel].preview_q15[i] =
+                    channel_samples[channel][i *
+                        (ANALYZER_FFT_SIZE / ANALYZER_PREVIEW_SAMPLES)];
+            }
+        }
+        dsp_result.processing_us = platform_time_us() - started_us;
+        dsp_result.dropped_blocks = platform_adc_overruns();
+        dsp_result.status |= status_get();
+        dsp_result.status |= spectrum_health_check(&dsp_result,
+                                                   DSP_DEADLINE_US);
+        (void)xQueueOverwrite(result_queue, &dsp_result);
+        app_health_kick(HEALTH_DSP);
     }
 }
 
 static void telemetry_task(void *argument) {
     (void)argument;
     uint16_t sequence = 0u;
-    TickType_t last_tx = 0u;
+    TickType_t last_output = 0u;
     for (;;) {
-        fused_state_t state;
-        if (xQueueReceive(state_queue, &state, pdMS_TO_TICKS(100u)) != pdPASS) {
+        if (xQueueReceive(result_queue, &telemetry_result,
+                          pdMS_TO_TICKS(100u)) != pdPASS) {
             app_health_kick(HEALTH_TELEMETRY);
             continue;
         }
         const TickType_t now = xTaskGetTickCount();
-        if ((now - last_tx) < pdMS_TO_TICKS(1000u / TELEMETRY_OUTPUT_HZ)) continue;
-
-        uint8_t frame[TELEMETRY_MAX_FRAME];
-        const size_t length = telemetry_encode_state(sequence, &state, frame,
-                                                     sizeof(frame));
-        if (length != 0u && platform_uart_write_dma(frame, length, 10u)) {
-            ++sequence;
-            last_tx = now;
+        if ((now - last_output) < pdMS_TO_TICKS(1000u / SPECTRUM_OUTPUT_HZ)) {
             app_health_kick(HEALTH_TELEMETRY);
-        } else {
-            status_set(STATUS_UART_DROP);
+            continue;
         }
+        for (uint8_t channel = 0u; channel < ANALYZER_CHANNELS; ++channel) {
+            for (uint8_t chunk = 0u;
+                 chunk < ANALYZER_CHUNKS_PER_CHANNEL; ++chunk) {
+                const size_t length = telemetry_encode_spectrum_chunk(
+                    sequence, &telemetry_result, channel, chunk,
+                    telemetry_frame, sizeof(telemetry_frame));
+                if (length == 0u ||
+                    !platform_uart_write_dma(telemetry_frame, length,
+                                             UART_FRAME_TIMEOUT_MS)) {
+                    status_set(STATUS_UART_BACKPRESSURE);
+                    break;
+                }
+                ++sequence;
+            }
+        }
+        last_output = now;
+        app_health_kick(HEALTH_TELEMETRY);
     }
 }
 
@@ -232,48 +172,27 @@ static void watchdog_task(void *argument) {
         if ((observed & HEALTH_REQUIRED) == HEALTH_REQUIRED) {
             platform_watchdog_feed();
         }
-        /* Missing health intentionally causes an IWDG reset. */
-    }
-}
-
-static void power_task(void *argument) {
-    (void)argument;
-    for (;;) {
-        /* STOP policy can be extended with a command/activity event group. */
-        platform_enter_power_mode(PLATFORM_POWER_IDLE);
-        vTaskDelay(pdMS_TO_TICKS(100u));
     }
 }
 
 void app_start(void) {
-    imu_queue = xQueueCreateStatic(IMU_QUEUE_DEPTH, sizeof(imu_sample_t),
-                                   imu_queue_storage, &imu_queue_control);
-    state_queue = xQueueCreateStatic(TELEMETRY_QUEUE_DEPTH,
-                                     sizeof(fused_state_t),
-                                     state_queue_storage,
-                                     &state_queue_control);
-#if ENABLE_ENV_SENSORS
-    baro_queue = xQueueCreateStatic(BARO_QUEUE_DEPTH, sizeof(baro_sample_t),
-                                    baro_queue_storage, &baro_queue_control);
-    temp_queue = xQueueCreateStatic(TEMP_QUEUE_DEPTH, sizeof(temp_sample_t),
-                                    temp_queue_storage, &temp_queue_control);
-    configASSERT(imu_queue && baro_queue && temp_queue && state_queue);
-#else
-    configASSERT(imu_queue && state_queue);
-#endif
-
-    configASSERT(xTaskCreate(imu_task, "imu", 384u, NULL, TASK_PRIORITY_IMU,
-                             NULL) == pdPASS);
-    configASSERT(xTaskCreate(fusion_task, "fusion", 640u, NULL,
-                             TASK_PRIORITY_FUSION, NULL) == pdPASS);
-#if ENABLE_ENV_SENSORS
-    configASSERT(xTaskCreate(environment_task, "env", 384u, NULL,
-                             TASK_PRIORITY_ENV, NULL) == pdPASS);
-#endif
-    configASSERT(xTaskCreate(telemetry_task, "uart", 384u, NULL,
+    if (platform_watchdog_reset_detected()) {
+        status_set(STATUS_WATCHDOG_RESET);
+    }
+    block_queue = xQueueCreateStatic(2u, sizeof(adc_dma_block_t),
+                                     block_queue_storage,
+                                     &block_queue_control);
+    result_queue = xQueueCreateStatic(SPECTRUM_QUEUE_DEPTH,
+                                      sizeof(spectrum_result_t),
+                                      result_queue_storage,
+                                      &result_queue_control);
+    configASSERT(block_queue != NULL && result_queue != NULL);
+    configASSERT(xTaskCreate(acquisition_task, "adc", 384u, NULL,
+                             TASK_PRIORITY_ACQUISITION, NULL) == pdPASS);
+    configASSERT(xTaskCreate(dsp_task, "dsp", 768u, NULL,
+                             TASK_PRIORITY_DSP, NULL) == pdPASS);
+    configASSERT(xTaskCreate(telemetry_task, "uart", 512u, NULL,
                              TASK_PRIORITY_TELEMETRY, NULL) == pdPASS);
-    configASSERT(xTaskCreate(power_task, "power", 256u, NULL,
-                             TASK_PRIORITY_POWER, NULL) == pdPASS);
     configASSERT(xTaskCreate(watchdog_task, "wdg", 256u, NULL,
                              TASK_PRIORITY_WATCHDOG, NULL) == pdPASS);
 }

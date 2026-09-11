@@ -1,28 +1,24 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
-#define ENABLE_ENV_SENSORS        0u
+#define ADC_SAMPLE_RATE_HZ          100000u
+#define ADC_CHANNEL_COUNT                2u
+#define ADC_DMA_FRAMES_PER_HALF        1024u
+#define SPECTRUM_OUTPUT_HZ               20u
+#define SPECTRUM_QUEUE_DEPTH              1u
 
-/* The no-solder reference build uses a Qwiic I2C link at 400 kHz. */
-#define IMU_SAMPLE_HZ           200u
-#define FUSION_OUTPUT_HZ        100u
-#define BARO_SAMPLE_HZ           50u
-#define TEMP_SAMPLE_HZ           10u
-#define TELEMETRY_OUTPUT_HZ       50u
+#define TASK_PRIORITY_WATCHDOG            6u
+#define TASK_PRIORITY_ACQUISITION         5u
+#define TASK_PRIORITY_DSP                 4u
+#define TASK_PRIORITY_TELEMETRY           3u
+#define TASK_PRIORITY_MONITOR             2u
 
-#define IMU_QUEUE_DEPTH            8u
-#define BARO_QUEUE_DEPTH           4u
-#define TEMP_QUEUE_DEPTH           2u
-#define TELEMETRY_QUEUE_DEPTH      8u
-
-#define TASK_PRIORITY_WATCHDOG     6u
-#define TASK_PRIORITY_IMU          5u
-#define TASK_PRIORITY_FUSION       4u
-#define TASK_PRIORITY_ENV          3u
-#define TASK_PRIORITY_TELEMETRY    2u
-#define TASK_PRIORITY_POWER        1u
-
-#define WATCHDOG_WINDOW_MS        250u
-#define WATCHDOG_TIMEOUT_MS      1000u
+#define DSP_DEADLINE_US                9000u
+#define ADC_BLOCK_TIMEOUT_MS              20u
+#define UART_BAUD_RATE                 921600u
+#define UART_FRAME_TIMEOUT_MS              8u
+#define ENABLE_DAC_LOOPBACK_TEST            1u
+#define WATCHDOG_WINDOW_MS               250u
+#define WATCHDOG_TIMEOUT_MS             1000u
 
 #endif

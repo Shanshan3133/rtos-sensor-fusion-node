@@ -1,23 +1,30 @@
-# Hardware validation checklist
+# Hardware acceptance checklist
 
-Record firmware commit, board revision, sensor lot IDs, compiler version, and
-ambient conditions with every run.
+All numbers below are acceptance targets until a dated capture is committed.
 
 | Test | Method | Pass criterion |
 |---|---|---|
-| IMU cadence | I2C SCL/SDA on logic analyzer, 10 s | 200 Hz ±0.1%; no missed acquisition |
-| DMA behavior | GPIO markers around start/completion | CPU is not polling; completion <500 us |
-| Fusion deadline | DWT cycle instrumentation, 10 min | p99.9 <180 us; zero 5 ms misses |
-| UART integrity | capture 1 hour, run decoder | zero CRC errors; zero sequence gaps |
-| Static attitude | six orthogonal faces | roll/pitch error <1.0 degree RMS |
-| Gyro bias | stationary, 10 min | post-cal mean <0.01 rad/s each axis |
-| Altitude noise (optional) | stationary, 10 min | filtered standard deviation <0.5 m |
-| Thermal drift (optional) | 10–50 C chamber or controlled ramp | plot bias vs temperature; no resets |
-| I2C fault | momentarily hold SDA low | bounded timeout; recovery status set |
-| Task deadlock | compile-time fault injection | IWDG resets in 1.0 s ±LSI tolerance |
-| Brownout (optional) | controlled supply ramp | clean reset; no corrupt calibration |
-| Power (optional) | series ammeter in each state | log NORMAL/IDLE/STOP current |
+| Sampling rate | GPIO marker at DMA half callback, 60 s | 10.240 ms block period within 0.1%; no gaps |
+| Dual-channel path | PA4 wired to PA0 and PA1 | both detect 976.5625 Hz; frequency error < one FFT bin |
+| FFT deadline | DWT cycle count and DSP GPIO pulse | maximum processing time < 9.0 ms |
+| Spectrum output | Python monitor for 30 min | 20 results/s/channel; no unexpected sequence loss |
+| Protocol faults | Python unit suite | malformed/CRC/truncated/escape cases recover |
+| UART saturation | worst-case escaped test data | no transmit timeout or flagged drop |
+| Stack margin | `uxTaskGetStackHighWaterMark()` after stress | at least 25% free per task |
+| Watchdog | compile-time DSP-stall injection | IWDG reset occurs; reset cause reported |
+| Idle behavior | timing trace around `WFI` or debugger counter | CPU enters sleep between runnable work |
 
-Before claiming numbers, measure them. Targets above are acceptance goals, not
-results. Preserve raw captures and scripts so another engineer can reproduce
-every chart.
+Record board revision, firmware commit, compiler version/options, clock
+configuration, test duration, and raw CSV/logic traces. A logic analyzer shows
+GPIO and UART activity, not DMA itself; GPIO markers establish the relationship
+between DMA completion and task execution.
+
+Suggested evidence files after the board arrives:
+
+```text
+evidence/run-YYYYMMDD/metadata.md
+evidence/run-YYYYMMDD/telemetry.csv
+evidence/run-YYYYMMDD/dma-timing.sr
+evidence/run-YYYYMMDD/stack-and-wcet.md
+evidence/run-YYYYMMDD/spectrum.png
+```

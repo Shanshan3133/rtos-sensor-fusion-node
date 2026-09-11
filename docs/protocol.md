@@ -1,43 +1,42 @@
-# Binary telemetry protocol v1
+# Binary telemetry protocol v2
 
-Transport framing is `7E <escaped body> 7E`. Within the body, bytes `7E` and
-`7D` become `7D 5E` and `7D 5D`, respectively. A receiver discards oversized,
-short, unknown-version, and bad-CRC frames, then resynchronizes at the next
-`7E`.
+Transport framing is `7E <escaped body> 7E`. Body bytes `7E` and `7D` are sent
+as `7D 5E` and `7D 5D`. Multibyte fields are little-endian. CRC-16/CCITT-FALSE
+uses polynomial `0x1021`, initial value `0xFFFF`, no reflection, and no final
+XOR; `123456789` checks to `0x29B1`.
 
-The CRC is CRC-16/CCITT-FALSE: polynomial `0x1021`, initial value `0xFFFF`, no
-reflection, and no final XOR. It covers the header and payload, not delimiters
-or escaping. The check value for ASCII `123456789` is `0x29B1`.
-
-## Header (6 bytes)
+Each analysis result is eight packets: four 128-bin chunks for each of two
+channels. Each chunk also carries 32 decimated waveform samples.
 
 | Offset | Type | Meaning |
 |---:|---|---|
-| 0 | u8 | protocol version (`1`) |
-| 1 | u8 | packet type (`1` = fused state) |
-| 2 | u16 | payload length (`44`) |
-| 4 | u16 | wrapping sequence number |
+| 0 | u8 | version = 2 |
+| 1 | u8 | type = 1, spectrum chunk |
+| 2 | u16 | payload length = 228 |
+| 4 | u16 | wrapping packet sequence |
+| 6 | u32 | timestamp, microseconds |
+| 10 | u32 | status bitmap |
+| 14 | u8 | channel, 0 or 1 |
+| 15 | u8 | chunk index, 0..3 |
+| 16 | u8 | chunk count = 4 |
+| 17 | u8 | reserved = 0 |
+| 18 | u32 | sample rate in Hz |
+| 22 | u16 | first spectrum bin |
+| 24 | u16 | bin count = 128 |
+| 26 | u16 | RMS, Q15 |
+| 28 | u16 | peak, Q15 |
+| 30 | u32 | dominant frequency, millihertz |
+| 34 | u32 | DSP processing time, microseconds |
+| 38 | u32 | dropped block count |
+| 42 | 128 x u8 | compressed magnitude, approximately Q15 / 128 |
+| 170 | 32 x i16 | waveform preview, Q15 |
+| 234 | u16 | CRC over bytes 0..233 |
 
-## Fused-state payload (44 bytes)
+The raw body is 236 bytes and the maximum escaped packet is 474 bytes. Eight
+packets at 20 Hz consume at most 75,840 bytes/s on the wire, below the 92,160
+bytes/s payload capacity of 921600 baud 8-N-1. This is why magnitudes are
+compressed for transport instead of sending 16-bit bins.
 
-| Offset | Type | Unit / meaning |
-|---:|---|---|
-| 6 | u32 | microseconds since boot, wraps naturally |
-| 10 | u32 | status bitmap from `sensor_types.h` |
-| 14 | i32 | roll, microradians |
-| 18 | i32 | pitch, microradians |
-| 22 | i32 | yaw, microradians |
-| 26 | i32 | altitude, millimetres |
-| 30 | i32 | vertical speed, millimetres/second |
-| 34 | i32 | temperature, millidegrees Celsius |
-| 38 | 3 × u32 | reserved, must be zero |
-| 50 | u16 | CRC-16 |
-
-The full unescaped frame body is 52 bytes. At 50 Hz, even worst-case escaping
-uses under 6% of a 921600 baud 8-N-1 link.
-
-The firmware decoder keeps separate counters for valid frames, CRC errors,
-format errors, oversized bodies, invalid/dangling escapes, resynchronizations,
-and missing sequence numbers. Invalid input enters a bounded drop state and is
-ignored until the next `0x7E`; no corrupted body can grow the buffer beyond 52
-bytes or contaminate the following valid frame.
+The firmware and Python decoders bound input length and separately count CRC,
+format, overflow, escape, resynchronization, and sequence-loss errors. A bad
+frame cannot contaminate the next delimiter-bounded frame.
