@@ -22,6 +22,7 @@ static uint8_t result_queue_storage[sizeof(spectrum_result_t)];
 
 static spectrum_workspace_t spectrum_workspace[ANALYZER_CHANNELS];
 static int16_t channel_samples[ANALYZER_CHANNELS][ANALYZER_FFT_SIZE];
+static uint16_t channel_clipped_samples[ANALYZER_CHANNELS];
 /* Task-owned static buffers keep large FFT results off the FreeRTOS stacks. */
 static spectrum_result_t dsp_result;
 static spectrum_result_t telemetry_result;
@@ -86,14 +87,34 @@ static void acquisition_task(void *argument) {
 }
 
 static void unpack_dual_adc(const adc_dma_block_t *block) {
+    uint32_t sums[ANALYZER_CHANNELS] = {0u};
+    memset(channel_clipped_samples, 0, sizeof(channel_clipped_samples));
     for (size_t i = 0u; i < ANALYZER_FFT_SIZE; ++i) {
 #if FAULT_INJECT_FREEZE_ADC
         const uint32_t packed = block->packed_samples[0];
 #else
         const uint32_t packed = block->packed_samples[i];
 #endif
-        const int32_t adc1 = (int32_t)(packed & 0x0FFFu) - 2048;
-        const int32_t adc2 = (int32_t)((packed >> 16) & 0x0FFFu) - 2048;
+        const uint16_t adc1 = (uint16_t)(packed & 0x0FFFu);
+        const uint16_t adc2 = (uint16_t)((packed >> 16) & 0x0FFFu);
+        sums[0] += adc1;
+        sums[1] += adc2;
+        if (adc1 <= 4u || adc1 >= 4091u) ++channel_clipped_samples[0];
+        if (adc2 <= 4u || adc2 >= 4091u) ++channel_clipped_samples[1];
+    }
+    const int32_t means[ANALYZER_CHANNELS] = {
+        (int32_t)((sums[0] + ANALYZER_FFT_SIZE / 2u) / ANALYZER_FFT_SIZE),
+        (int32_t)((sums[1] + ANALYZER_FFT_SIZE / 2u) / ANALYZER_FFT_SIZE)
+    };
+    for (size_t i = 0u; i < ANALYZER_FFT_SIZE; ++i) {
+#if FAULT_INJECT_FREEZE_ADC
+        const uint32_t packed = block->packed_samples[0];
+#else
+        const uint32_t packed = block->packed_samples[i];
+#endif
+        const int32_t adc1 = (int32_t)(packed & 0x0FFFu) - means[0];
+        const int32_t adc2 =
+            (int32_t)((packed >> 16) & 0x0FFFu) - means[1];
         channel_samples[0][i] = (int16_t)(adc1 << 4);
         channel_samples[1][i] = (int16_t)(adc2 << 4);
     }
@@ -118,7 +139,7 @@ static void dsp_task(void *argument) {
         dsp_result.timestamp_us = block.timestamp_us;
         dsp_result.generation = block.generation;
         dsp_result.sample_rate_hz = ADC_SAMPLE_RATE_HZ;
-        const uint32_t started_us = platform_time_us();
+        const uint32_t started_cycles = platform_cycle_count();
         if (platform_adc_generation() != block.generation) {
             status_set(STATUS_DMA_STALE | STATUS_FRAME_DROPPED);
             app_health_kick(HEALTH_DSP);
@@ -137,13 +158,18 @@ static void dsp_task(void *argument) {
                                       &dsp_result.channel[channel])) {
                 dsp_result.status |= STATUS_NUMERIC_FAULT;
             }
+            dsp_result.channel[channel].clipped_samples =
+                channel_clipped_samples[channel];
             for (size_t i = 0u; i < ANALYZER_PREVIEW_SAMPLES; ++i) {
                 dsp_result.channel[channel].preview_q15[i] =
                     channel_samples[channel][i *
                         (ANALYZER_FFT_SIZE / ANALYZER_PREVIEW_SAMPLES)];
             }
         }
-        dsp_result.processing_us = platform_time_us() - started_us;
+        const uint32_t elapsed_cycles =
+            platform_cycle_count() - started_cycles;
+        dsp_result.processing_us = elapsed_cycles /
+            (platform_core_clock_hz() / 1000000u);
         dsp_result.dropped_blocks = platform_adc_overruns();
         dsp_result.status |= status_get();
         dsp_result.status |= spectrum_health_check(&dsp_result,

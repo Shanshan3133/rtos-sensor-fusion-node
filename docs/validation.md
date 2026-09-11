@@ -2,6 +2,19 @@
 
 All numbers below are acceptance targets until a dated capture is committed.
 
+## First-board priority
+
+1. Confirm TIM2-triggered DAC and the two simultaneous ADC paths. Capture the
+   DAC waveform plus DMA callback timing GPIO; a logic analyzer cannot measure
+   analog voltage, so use an oscilloscope for PA4 when available.
+2. Read the per-frame DWT-derived `processing_us`, capture the maximum over a
+   sustained run, and compare it with the 9 ms deadline in `timing_budget.md`.
+3. Plot the expected 976.5625 Hz DAC tone in the Python spectrum view and save
+   the complete spectrum CSV plus screenshot.
+4. Disconnect PA4-to-PA0 while running, confirm weak/frozen status and loss of
+   `STATUS_SIGNAL_VALID`, reconnect it, and confirm recovery on the next valid
+   result.
+
 | Test | Method | Pass criterion |
 |---|---|---|
 | Sampling rate | GPIO marker at DMA half callback, 60 s | 10.240 ms block period within 0.1%; no gaps |

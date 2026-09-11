@@ -68,6 +68,14 @@ uint32_t platform_time_us(void) {
     return __HAL_TIM_GET_COUNTER(&htim5);
 }
 
+uint32_t platform_cycle_count(void) {
+    return DWT->CYCCNT;
+}
+
+uint32_t platform_core_clock_hz(void) {
+    return SystemCoreClock;
+}
+
 bool platform_watchdog_reset_detected(void) {
     return watchdog_reset_detected;
 }

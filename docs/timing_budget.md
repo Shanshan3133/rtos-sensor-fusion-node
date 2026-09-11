@@ -31,4 +31,8 @@ zero dropped acquisition blocks during a 30-minute stress run.
 
 TIM5 is configured as the application timestamp source at 1 MHz, giving a
 71.58-minute unsigned wrap period. DWT remains available for short-interval
-cycle profiling only; it is not used as the long-running timestamp.
+cycle profiling only; it is not used as the long-running timestamp. The DSP
+task records `DWT->CYCCNT` before DC removal and after both channel FFTs, then
+converts the wrap-safe cycle delta to `processing_us` for every telemetry frame.
+The 9 ms value remains an acceptance limit until real hardware results replace
+the `TBD` fields.

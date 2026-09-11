@@ -11,6 +11,7 @@ Push-Location $projectRoot
 try {
     python -m unittest discover -s tests -v
     python tools\spectrum_monitor.py --self-test
+    python tools\fft_precision_report.py --check
 
     Write-Host '[2/3] Locating STM32 ARM GCC'
     $compiler = Get-ChildItem -LiteralPath $cubeRoot -Recurse `

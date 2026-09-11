@@ -28,6 +28,12 @@ repeatability. The target build defines `ANALYZER_USE_CMSIS_DSP` and compiles
 implement the same interface and produce RMS, peak, 512 magnitudes, and a
 parabolically interpolated dominant frequency.
 
+For every channel, the application first calculates the 1024-sample mean and
+subtracts it while converting the ADC block to Q15. Only then does the selected
+backend apply the Hann window and execute the FFT. The exact order is therefore
+`block DC removal -> Hann -> FFT`, preventing DC offset from being shaped into
+low-frequency leakage by the window.
+
 Q15 spectra remain at full resolution inside the MCU. Only UART spectrum bins
 are quantized to 8 bits. This bounds worst-case escaped traffic while leaving
 RMS, peak, and dominant frequency at their original precision.
@@ -47,3 +53,11 @@ acquisition, DSP, and telemetry have each progressed.
 
 `WFI` is used during idle time. STOP mode is not claimed because continuous
 100 kS/s conversion is incompatible with stopping the clock tree.
+
+## Status lifetime
+
+Signal-quality flags are calculated from each completed result and recover on
+the next valid result. Acquisition gaps, overruns, stale DMA ownership, dropped
+frames, UART backpressure, reset cause, and explicit fault injection are sticky
+until reset. This split lets the display recover immediately after reconnecting
+a signal while preserving intermittent infrastructure failures for diagnosis.

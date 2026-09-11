@@ -24,6 +24,7 @@ typedef struct {
     int16_t preview_q15[ANALYZER_PREVIEW_SAMPLES];
     uint16_t rms_q15;
     uint16_t peak_q15;
+    uint16_t clipped_samples;
     uint32_t dominant_millihz;
 } channel_spectrum_t;
 

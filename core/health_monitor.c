@@ -56,7 +56,8 @@ uint32_t spectrum_health_check(const spectrum_result_t *result,
             status |= STATUS_SIGNAL_WEAK;
             signal_valid = false;
         }
-        if (result->channel[channel].peak_q15 >= SIGNAL_CLIP_Q15) {
+        if (result->channel[channel].clipped_samples != 0u ||
+            result->channel[channel].peak_q15 >= SIGNAL_CLIP_Q15) {
             status |= STATUS_ADC_CLIPPING;
             signal_valid = false;
         }

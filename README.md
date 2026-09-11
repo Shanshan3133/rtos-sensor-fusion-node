@@ -45,6 +45,38 @@ binary has already run.
 See [architecture](docs/architecture.md), [protocol](docs/protocol.md), and the
 [timing budget](docs/timing_budget.md).
 
+The processing order is deliberately fixed:
+
+```text
+unpack ADC -> calculate/remove each block's DC mean -> Hann window
+-> 1024-point FFT -> magnitude and peak interpolation
+```
+
+Removing DC before applying the window avoids converting a DC offset into
+window-shaped spectral leakage. A float-versus-Q15 model comparison is
+published in [FFT precision](docs/fft_precision.md).
+
+## Status recovery policy
+
+```mermaid
+stateDiagram-v2
+    [*] --> Starting
+    Starting --> Valid: current block passes both channels
+    Valid --> SignalFault: weak / clipped / frozen / numeric
+    SignalFault --> Valid: next complete block passes both channels
+    Valid --> LatchedFault: DMA gap / stale buffer / UART timeout / dropped frame
+    SignalFault --> LatchedFault: infrastructure fault
+    LatchedFault --> Starting: MCU reset
+    LatchedFault --> WatchdogReset: missing task health vote
+    WatchdogReset --> Starting: reboot; reset-cause bit retained in telemetry
+```
+
+Signal-quality bits describe the current FFT result and therefore clear on the
+next valid result. Infrastructure faults are sticky evidence and clear only on
+MCU reset. `STATUS_WATCHDOG_RESET` reports the previous boot cause; the hardware
+reset flags are cleared after capture. This intentionally favors diagnosability
+over silently hiding an intermittent DMA or transport failure.
+
 ## Repository map
 
 ```text
@@ -62,6 +94,7 @@ docs/                Wiring, architecture, timing, and validation
 ```powershell
 python -m unittest discover -s tests -v
 python tools\spectrum_monitor.py --self-test
+python tools\fft_precision_report.py --check
 powershell -ExecutionPolicy Bypass -File tools\verify.ps1
 ```
 
@@ -71,7 +104,8 @@ Python suite. This is a compile check, not execution of the ARM objects. If a
 native C compiler and CMake are installed, the portable executable can
 additionally be built and run with CTest.
 
-For live serial input and plotting, install the two host-only packages:
+For live serial input, plotting, and the precision report, install the
+host-only packages:
 
 ```powershell
 python -m pip install -r requirements.txt

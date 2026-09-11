@@ -8,6 +8,8 @@
 
 void platform_init(void);
 uint32_t platform_time_us(void);
+uint32_t platform_cycle_count(void);
+uint32_t platform_core_clock_hz(void);
 bool platform_watchdog_reset_detected(void);
 
 /* ADC1/ADC2 dual-regular simultaneous mode, timer triggered, packed in CDR. */
