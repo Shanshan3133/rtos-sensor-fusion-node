@@ -14,6 +14,7 @@ bool platform_watchdog_reset_detected(void);
 bool platform_adc_start(void);
 bool platform_adc_wait_block(adc_dma_block_t *block, uint32_t timeout_ms);
 uint32_t platform_adc_overruns(void);
+uint32_t platform_adc_generation(void);
 
 /* USART2 TX DMA through the NUCLEO ST-LINK virtual COM port. */
 bool platform_uart_write_dma(const uint8_t *data, size_t length,

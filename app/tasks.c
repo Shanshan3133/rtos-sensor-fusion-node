@@ -56,6 +56,9 @@ static void acquisition_task(void *argument) {
     if (platform_test_signal_active()) status_set(STATUS_TEST_SIGNAL);
     const uint32_t block_period_us =
         (ADC_DMA_FRAMES_PER_HALF * 1000000u) / ADC_SAMPLE_RATE_HZ;
+#if FAULT_INJECT_DROP_EVERY_N_BLOCKS > 0u
+    uint32_t blocks_seen = 0u;
+#endif
 
     for (;;) {
         adc_dma_block_t block;
@@ -67,6 +70,14 @@ static void acquisition_task(void *argument) {
         status_set(acquisition_health_check(&monitor, &block,
                                             block_period_us));
         if (platform_adc_overruns() != 0u) status_set(STATUS_ADC_OVERRUN);
+#if FAULT_INJECT_DROP_EVERY_N_BLOCKS > 0u
+        ++blocks_seen;
+        if ((blocks_seen % FAULT_INJECT_DROP_EVERY_N_BLOCKS) == 0u) {
+            status_set(STATUS_FRAME_DROPPED | STATUS_FAULT_INJECTED);
+            app_health_kick(HEALTH_ACQUISITION);
+            continue;
+        }
+#endif
         if (xQueueSend(block_queue, &block, 0u) != pdPASS) {
             status_set(STATUS_FRAME_DROPPED);
         }
@@ -76,7 +87,11 @@ static void acquisition_task(void *argument) {
 
 static void unpack_dual_adc(const adc_dma_block_t *block) {
     for (size_t i = 0u; i < ANALYZER_FFT_SIZE; ++i) {
+#if FAULT_INJECT_FREEZE_ADC
+        const uint32_t packed = block->packed_samples[0];
+#else
         const uint32_t packed = block->packed_samples[i];
+#endif
         const int32_t adc1 = (int32_t)(packed & 0x0FFFu) - 2048;
         const int32_t adc2 = (int32_t)((packed >> 16) & 0x0FFFu) - 2048;
         channel_samples[0][i] = (int16_t)(adc1 << 4);
@@ -89,6 +104,9 @@ static void dsp_task(void *argument) {
     for (unsigned channel = 0u; channel < ANALYZER_CHANNELS; ++channel) {
         spectrum_workspace_init(&spectrum_workspace[channel]);
     }
+#if FAULT_INJECT_DSP_STALL_AFTER_BLOCKS > 0u
+    uint32_t blocks_processed = 0u;
+#endif
     for (;;) {
         adc_dma_block_t block;
         if (xQueueReceive(block_queue, &block,
@@ -101,7 +119,17 @@ static void dsp_task(void *argument) {
         dsp_result.generation = block.generation;
         dsp_result.sample_rate_hz = ADC_SAMPLE_RATE_HZ;
         const uint32_t started_us = platform_time_us();
+        if (platform_adc_generation() != block.generation) {
+            status_set(STATUS_DMA_STALE | STATUS_FRAME_DROPPED);
+            app_health_kick(HEALTH_DSP);
+            continue;
+        }
         unpack_dual_adc(&block);
+        if (platform_adc_generation() != block.generation) {
+            status_set(STATUS_DMA_STALE | STATUS_FRAME_DROPPED);
+            app_health_kick(HEALTH_DSP);
+            continue;
+        }
         for (unsigned channel = 0u; channel < ANALYZER_CHANNELS; ++channel) {
             if (!spectrum_analyze_q15(&spectrum_workspace[channel],
                                       channel_samples[channel],
@@ -121,6 +149,13 @@ static void dsp_task(void *argument) {
         dsp_result.status |= spectrum_health_check(&dsp_result,
                                                    DSP_DEADLINE_US);
         (void)xQueueOverwrite(result_queue, &dsp_result);
+#if FAULT_INJECT_DSP_STALL_AFTER_BLOCKS > 0u
+        ++blocks_processed;
+        if (blocks_processed >= FAULT_INJECT_DSP_STALL_AFTER_BLOCKS) {
+            status_set(STATUS_FAULT_INJECTED);
+            vTaskSuspend(NULL);
+        }
+#endif
         app_health_kick(HEALTH_DSP);
     }
 }
@@ -129,6 +164,9 @@ static void telemetry_task(void *argument) {
     (void)argument;
     uint16_t sequence = 0u;
     TickType_t last_output = 0u;
+#if FAULT_INJECT_UART_FAIL_EVERY_N_FRAMES > 0u
+    uint32_t frames_attempted = 0u;
+#endif
     for (;;) {
         if (xQueueReceive(result_queue, &telemetry_result,
                           pdMS_TO_TICKS(100u)) != pdPASS) {
@@ -146,7 +184,16 @@ static void telemetry_task(void *argument) {
                 const size_t length = telemetry_encode_spectrum_chunk(
                     sequence, &telemetry_result, channel, chunk,
                     telemetry_frame, sizeof(telemetry_frame));
-                if (length == 0u ||
+#if FAULT_INJECT_UART_FAIL_EVERY_N_FRAMES > 0u
+                ++frames_attempted;
+                const bool injected_failure =
+                    (frames_attempted %
+                     FAULT_INJECT_UART_FAIL_EVERY_N_FRAMES) == 0u;
+                if (injected_failure) status_set(STATUS_FAULT_INJECTED);
+#else
+                const bool injected_failure = false;
+#endif
+                if (length == 0u || injected_failure ||
                     !platform_uart_write_dma(telemetry_frame, length,
                                              UART_FRAME_TIMEOUT_MS)) {
                     status_set(STATUS_UART_BACKPRESSURE);

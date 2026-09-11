@@ -258,6 +258,30 @@ def record(frame: SpectrumFrame) -> dict[str, int | float]:
     }
 
 
+def spectrum_records(frame: SpectrumFrame) -> Iterator[dict[str, int | float]]:
+    for bin_index, magnitude in enumerate(frame.magnitudes):
+        yield {
+            "timestamp_us": frame.timestamp_us,
+            "channel": frame.channel,
+            "bin": bin_index,
+            "frequency_hz": bin_index * frame.bin_hz,
+            "magnitude": magnitude,
+        }
+
+
+def waveform_records(frame: SpectrumFrame) -> Iterator[dict[str, int | float]]:
+    sample_step = FFT_SIZE / PREVIEW_SAMPLES
+    for sample_index, amplitude in enumerate(frame.preview):
+        yield {
+            "timestamp_us": frame.timestamp_us,
+            "channel": frame.channel,
+            "sample": sample_index,
+            "time_us": sample_index * sample_step * 1_000_000.0 /
+                       frame.sample_rate_hz,
+            "amplitude": amplitude,
+        }
+
+
 class LivePlot:
     def __init__(self) -> None:
         try:
@@ -305,6 +329,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baud", type=int, default=921600,
                         help="USART2 baud rate (default: 921600)")
     parser.add_argument("--csv", type=argparse.FileType("w"))
+    parser.add_argument("--spectrum-csv", type=argparse.FileType("w"),
+                        help="write every frequency bin in long CSV format")
+    parser.add_argument("--waveform-csv", type=argparse.FileType("w"),
+                        help="write every preview sample in long CSV format")
     parser.add_argument("--plot", action="store_true",
                         help="show live waveform and spectrum (requires matplotlib)")
     parser.add_argument("--self-test", action="store_true")
@@ -338,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
     decoder = FrameDecoder()
     assembler = SpectrumAssembler()
     writer = None
+    spectrum_writer = None
+    waveform_writer = None
     try:
         plotter = LivePlot() if args.plot else None
     except RuntimeError as error:
@@ -357,6 +387,22 @@ def main(argv: list[str] | None = None) -> int:
                     writer.writeheader()
                 writer.writerow(summary)
                 args.csv.flush()
+            if args.spectrum_csv:
+                rows = list(spectrum_records(frame))
+                spectrum_writer = spectrum_writer or csv.DictWriter(
+                    args.spectrum_csv, rows[0].keys())
+                if args.spectrum_csv.tell() == 0:
+                    spectrum_writer.writeheader()
+                spectrum_writer.writerows(rows)
+                args.spectrum_csv.flush()
+            if args.waveform_csv:
+                rows = list(waveform_records(frame))
+                waveform_writer = waveform_writer or csv.DictWriter(
+                    args.waveform_csv, rows[0].keys())
+                if args.waveform_csv.tell() == 0:
+                    waveform_writer.writeheader()
+                waveform_writer.writerows(rows)
+                args.waveform_csv.flush()
     print(f"frames={decoder.frames} errors={decoder.errors} "
           f"crc={decoder.crc_errors} format={decoder.format_errors} "
           f"overflow={decoder.overflow_errors} escape={decoder.escape_errors} "

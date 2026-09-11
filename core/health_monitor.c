@@ -1,5 +1,6 @@
 #include "health_monitor.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -42,13 +43,36 @@ uint32_t spectrum_health_check(const spectrum_result_t *result,
     if (result == NULL || result->sample_rate_hz == 0u) {
         return STATUS_NUMERIC_FAULT;
     }
-    uint32_t status = STATUS_SIGNAL_VALID;
+    uint32_t status = 0u;
+    bool signal_valid = true;
     if (result->processing_us > deadline_us) status |= STATUS_DSP_DEADLINE;
     for (unsigned channel = 0u; channel < ANALYZER_CHANNELS; ++channel) {
         if (result->channel[channel].dominant_millihz >
             (result->sample_rate_hz / 2u) * 1000u) {
             status |= STATUS_NUMERIC_FAULT;
+            signal_valid = false;
+        }
+        if (result->channel[channel].rms_q15 < SIGNAL_MIN_RMS_Q15) {
+            status |= STATUS_SIGNAL_WEAK;
+            signal_valid = false;
+        }
+        if (result->channel[channel].peak_q15 >= SIGNAL_CLIP_Q15) {
+            status |= STATUS_ADC_CLIPPING;
+            signal_valid = false;
+        }
+        int16_t minimum = result->channel[channel].preview_q15[0];
+        int16_t maximum = minimum;
+        for (size_t i = 1u; i < ANALYZER_PREVIEW_SAMPLES; ++i) {
+            const int16_t sample = result->channel[channel].preview_q15[i];
+            if (sample < minimum) minimum = sample;
+            if (sample > maximum) maximum = sample;
+        }
+        if ((int32_t)maximum - (int32_t)minimum <
+            (int32_t)SIGNAL_MIN_SPAN_Q15) {
+            status |= STATUS_SIGNAL_FROZEN;
+            signal_valid = false;
         }
     }
+    if (signal_valid) status |= STATUS_SIGNAL_VALID;
     return status;
 }

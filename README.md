@@ -14,7 +14,7 @@ required. A logic analyzer is useful evidence but is not required to run it.
 
 | Status | Scope |
 |---|---|
-| Host verified | CRC-16, framing, recovery, spectrum reassembly, bandwidth bound, and 14 Python/fault-injection tests; portable FFT/C tests pass Cortex-M4 strict compile checks but were not executed because this PC has no native C toolchain |
+| Host verified | CRC-16, framing, recovery, spectrum reassembly, complete CSV export, bandwidth bound, and 16 Python/fault-injection tests; portable FFT/C tests pass Cortex-M4 strict compile checks but were not executed because this PC has no native C toolchain |
 | Implemented; target build pending | FreeRTOS queues/tasks, dual-ADC DMA adapter, CMSIS-DSP Q15 backend, DAC DMA self-test, USART2 TX DMA, task health voting, IWDG policy, and WFI idle |
 | Requires the physical board | CubeMX-generated HAL project integration, flash/run, 100 kS/s timing, CMSIS-DSP WCET, UART endurance, stack high-water marks, watchdog reset, and captured evidence |
 
@@ -27,13 +27,16 @@ binary has already run.
 - ADC1 and ADC2 use dual regular simultaneous mode, triggered by TIM2 at
   100 kHz. DMA stores packed 12-bit samples in a two-half circular buffer.
 - The acquisition task is released by DMA half/full-complete notifications and
-  checks timestamp/generation continuity.
+  checks timestamp/generation continuity. The DSP task rejects a descriptor if
+  DMA begins reusing its half-buffer before the samples are copied.
 - The DSP task applies a Hann window and 1024-point FFT independently to both
   channels, calculates RMS/peak/dominant frequency, and overwrites a one-entry
   latest-result queue.
 - The telemetry task compresses Q15 magnitudes to 8-bit values and sends eight
   bounded packets per result using USART2 TX DMA through the board's ST-LINK
   virtual COM port at 921600 baud.
+- TIM5 runs as a 1 MHz 32-bit timebase, avoiding the approximately 23.9-second
+  wrap that a raw 180 MHz DWT counter would have caused.
 - The watchdog task feeds IWDG only after acquisition, DSP, and telemetry have
   all reported progress within the voting window.
 - Idle uses `WFI`; deeper STOP-mode claims are deliberately outside this
@@ -88,11 +91,15 @@ PA4 / A2 (DAC output) -> PA1 / A1 (ADC channel 2)
 Open the ST-LINK virtual COM port at 921600 8-N-1, then run:
 
 ```powershell
-python tools\spectrum_monitor.py --port COM5 --baud 921600 --plot --csv capture.csv
+python tools\spectrum_monitor.py --port COM5 --baud 921600 --plot `
+  --csv summary.csv --spectrum-csv spectrum.csv --waveform-csv waveform.csv
 ```
 
 The expected built-in tone is FFT bin 10:
 `100000 * 10 / 1024 = 976.5625 Hz`. Replace `COM5` with the enumerated port.
+
+Dedicated validation builds can inject acquisition drops, a frozen ADC input,
+UART failures, or a DSP deadlock. See [fault injection](docs/fault_injection.md).
 
 ## Resume wording
 

@@ -47,7 +47,12 @@ enum {
     STATUS_NUMERIC_FAULT     = 1u << 6,
     STATUS_WATCHDOG_RESET    = 1u << 7,
     STATUS_FRAME_DROPPED     = 1u << 8,
-    STATUS_TEST_SIGNAL       = 1u << 9
+    STATUS_TEST_SIGNAL       = 1u << 9,
+    STATUS_DMA_STALE         = 1u << 10,
+    STATUS_SIGNAL_WEAK       = 1u << 11,
+    STATUS_ADC_CLIPPING      = 1u << 12,
+    STATUS_SIGNAL_FROZEN     = 1u << 13,
+    STATUS_FAULT_INJECTED    = 1u << 14
 };
 
 #endif

@@ -104,6 +104,30 @@ class SpectrumMonitorTests(unittest.TestCase):
         available_bytes_per_second = 921600 // 10
         self.assertLess(required_bytes_per_second, available_bytes_per_second)
 
+    def test_15_complete_spectrum_csv_records(self):
+        decoder = monitor.FrameDecoder()
+        assembler = monitor.SpectrumAssembler()
+        complete = None
+        for index in range(monitor.CHUNKS):
+            chunk = list(decoder.feed(
+                monitor.make_test_frame(index, 0, index)))[0]
+            complete = assembler.push(chunk) or complete
+        rows = list(monitor.spectrum_records(complete))
+        self.assertEqual(len(rows), monitor.BINS)
+        self.assertEqual(rows[10]["frequency_hz"], 976.5625)
+
+    def test_16_complete_waveform_csv_records(self):
+        decoder = monitor.FrameDecoder()
+        assembler = monitor.SpectrumAssembler()
+        complete = None
+        for index in range(monitor.CHUNKS):
+            chunk = list(decoder.feed(
+                monitor.make_test_frame(index, 0, index)))[0]
+            complete = assembler.push(chunk) or complete
+        rows = list(monitor.waveform_records(complete))
+        self.assertEqual(len(rows), monitor.PREVIEW_SAMPLES)
+        self.assertEqual(rows[1]["time_us"], 80.0)
+
 
 if __name__ == "__main__":
     unittest.main()

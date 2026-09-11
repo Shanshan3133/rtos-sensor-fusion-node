@@ -37,6 +37,26 @@ packets at 20 Hz consume at most 75,840 bytes/s on the wire, below the 92,160
 bytes/s payload capacity of 921600 baud 8-N-1. This is why magnitudes are
 compressed for transport instead of sending 16-bit bins.
 
+## Status bitmap
+
+| Bit | Meaning |
+|---:|---|
+| 0 | ADC acquisition running |
+| 1 | both channels passed signal-quality checks |
+| 2 | ADC/DMA overrun or acquisition timeout |
+| 3 | generation or timestamp gap |
+| 4 | DSP deadline exceeded |
+| 5 | UART backpressure/timeout |
+| 6 | numeric or frequency plausibility failure |
+| 7 | previous reset was caused by IWDG |
+| 8 | result or acquisition frame dropped |
+| 9 | DAC loopback signal enabled |
+| 10 | queued DMA half-buffer was stale |
+| 11 | signal RMS below minimum |
+| 12 | ADC signal clipped near full scale |
+| 13 | waveform preview was effectively frozen |
+| 14 | dedicated fault-injection build activated a fault |
+
 The firmware and Python decoders bound input length and separately count CRC,
 format, overflow, escape, resynchronization, and sequence-loss errors. A bad
 frame cannot contaminate the next delimiter-bounded frame.

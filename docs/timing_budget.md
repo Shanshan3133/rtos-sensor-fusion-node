@@ -28,3 +28,7 @@ bytes are escaped.
 On hardware, measure DWT cycles and GPIO pulse widths in a release build, then
 replace targets with maximum and p99.9 results. Require 25% stack headroom and
 zero dropped acquisition blocks during a 30-minute stress run.
+
+TIM5 is configured as the application timestamp source at 1 MHz, giving a
+71.58-minute unsigned wrap period. DWT remains available for short-interval
+cycle profiling only; it is not used as the long-running timestamp.

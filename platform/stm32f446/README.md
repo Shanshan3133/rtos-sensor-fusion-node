@@ -20,6 +20,7 @@ Use hard-float Cortex-M4 options and link CMSIS-DSP plus `libm`.
 |---|---|
 | system clock | 180 MHz, valid APB prescalers, FPU enabled |
 | TIM2 | update/TRGO at exactly 100 kHz; master output trigger = update |
+| TIM5 | 32-bit up-counter at 1 MHz, period `0xFFFFFFFF`; no interrupt |
 | ADC1 | IN0/PA0, 12 bit, external trigger TIM2 TRGO, rising edge |
 | ADC2 | IN1/PA1, same trigger and sample time as ADC1 |
 | ADC multimode | dual regular simultaneous; DMA access mode for packed CDR; continuous DMA requests |
@@ -33,6 +34,10 @@ Use hard-float Cortex-M4 options and link CMSIS-DSP plus `libm`.
 Use ADC sampling time sufficient for the board's source impedance; 15 cycles or
 longer is a safe starting point for the DAC loopback. Verify conversion time is
 comfortably below the 10 us trigger interval.
+
+With a 90 MHz APB2 timer clock, select ADC prescaler `/4` for a 22.5 MHz ADC
+clock. With a 90 MHz TIM5 input clock, use prescaler 89 for the 1 MHz timebase.
+Confirm the actual timer clock after applying the APB multiplier rules.
 
 DMA/UART interrupt priorities that call FreeRTOS `FromISR` APIs must be
 numerically equal to or greater than

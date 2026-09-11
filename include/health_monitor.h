@@ -5,6 +5,10 @@
 
 #include "analyzer_types.h"
 
+#define SIGNAL_MIN_RMS_Q15   128u
+#define SIGNAL_CLIP_Q15    32700u
+#define SIGNAL_MIN_SPAN_Q15   32u
+
 typedef struct {
     uint32_t last_generation;
     uint32_t last_timestamp_us;

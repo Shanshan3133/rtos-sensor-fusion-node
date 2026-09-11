@@ -171,6 +171,35 @@ static void test_spectrum_health(void) {
     assert((spectrum_health_check(&result, 9000u) & STATUS_NUMERIC_FAULT) != 0u);
 }
 
+static void test_signal_quality_flags(void) {
+    spectrum_result_t result;
+    memset(&result, 0, sizeof(result));
+    result.sample_rate_hz = 100000u;
+    for (unsigned channel = 0u; channel < ANALYZER_CHANNELS; ++channel) {
+        result.channel[channel].rms_q15 = 1000u;
+        result.channel[channel].peak_q15 = 2000u;
+        for (size_t i = 0u; i < ANALYZER_PREVIEW_SAMPLES; ++i) {
+            result.channel[channel].preview_q15[i] =
+                (i & 1u) != 0u ? 1000 : -1000;
+        }
+    }
+    uint32_t status = spectrum_health_check(&result, 9000u);
+    assert((status & STATUS_SIGNAL_VALID) != 0u);
+    result.channel[0].rms_q15 = 0u;
+    status = spectrum_health_check(&result, 9000u);
+    assert((status & STATUS_SIGNAL_WEAK) != 0u);
+    assert((status & STATUS_SIGNAL_VALID) == 0u);
+    result.channel[0].rms_q15 = 1000u;
+    result.channel[0].peak_q15 = 32767u;
+    status = spectrum_health_check(&result, 9000u);
+    assert((status & STATUS_ADC_CLIPPING) != 0u);
+    result.channel[0].peak_q15 = 2000u;
+    memset(result.channel[0].preview_q15, 0,
+           sizeof(result.channel[0].preview_q15));
+    status = spectrum_health_check(&result, 9000u);
+    assert((status & STATUS_SIGNAL_FROZEN) != 0u);
+}
+
 int main(void) {
     test_crc();
     test_exact_bin_spectrum();
@@ -180,6 +209,7 @@ int main(void) {
     test_decoder_recovers_after_corruption();
     test_acquisition_health();
     test_spectrum_health();
+    test_signal_quality_flags();
     puts("core tests: PASS");
     return 0;
 }

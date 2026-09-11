@@ -13,6 +13,7 @@
 extern ADC_HandleTypeDef hadc1;
 extern DAC_HandleTypeDef hdac;
 extern TIM_HandleTypeDef htim2;
+extern TIM_HandleTypeDef htim5;
 extern UART_HandleTypeDef huart2;
 extern IWDG_HandleTypeDef hiwdg;
 extern void SystemClock_Config(void);
@@ -22,6 +23,7 @@ extern void MX_ADC1_Init(void);
 extern void MX_ADC2_Init(void);
 extern void MX_DAC_Init(void);
 extern void MX_TIM2_Init(void);
+extern void MX_TIM5_Init(void);
 extern void MX_USART2_UART_Init(void);
 
 #define ADC_DMA_HALF_FRAMES ADC_DMA_FRAMES_PER_HALF
@@ -56,12 +58,14 @@ void platform_init(void) {
     MX_ADC2_Init();
     MX_DAC_Init();
     MX_TIM2_Init();
+    MX_TIM5_Init();
     MX_USART2_UART_Init();
     enable_cycle_counter();
+    configASSERT(HAL_TIM_Base_Start(&htim5) == HAL_OK);
 }
 
 uint32_t platform_time_us(void) {
-    return DWT->CYCCNT / (SystemCoreClock / 1000000u);
+    return __HAL_TIM_GET_COUNTER(&htim5);
 }
 
 bool platform_watchdog_reset_detected(void) {
@@ -147,6 +151,10 @@ bool platform_adc_wait_block(adc_dma_block_t *block, uint32_t timeout_ms) {
 
 uint32_t platform_adc_overruns(void) {
     return adc_overrun_count;
+}
+
+uint32_t platform_adc_generation(void) {
+    return completed_generation;
 }
 
 bool platform_uart_write_dma(const uint8_t *data, size_t length,

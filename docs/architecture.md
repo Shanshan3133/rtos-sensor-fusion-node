@@ -39,9 +39,11 @@ ADCs from the same 100 kHz event. Two jumpers may fan PA4 out to PA0 and PA1,
 testing both channels against the same coherent source.
 
 The acquisition monitor checks block size, generation sequence, and timestamp
-spacing. The DSP monitor checks deadline and Nyquist plausibility. USART DMA
-timeouts set backpressure status. The independent watchdog is refreshed only
-when acquisition, DSP, and telemetry have each progressed.
+spacing. TIM5 supplies a 1 MHz 32-bit timebase. The DSP validates the DMA
+generation before and after copying samples, then checks deadline, minimum RMS,
+clipping, frozen input, and Nyquist plausibility. USART DMA timeouts set
+backpressure status. The independent watchdog is refreshed only when
+acquisition, DSP, and telemetry have each progressed.
 
 `WFI` is used during idle time. STOP mode is not claimed because continuous
 100 kS/s conversion is incompatible with stopping the clock tree.
